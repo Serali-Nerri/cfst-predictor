@@ -7,7 +7,7 @@ This module handles XGBoost model training, cross-validation, and hyperparameter
 import xgboost as xgb
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple, Optional, List, Any, cast
+from typing import Dict, Tuple, Optional, List, Any, Protocol, Union, cast
 from sklearn.model_selection import KFold, cross_val_score
 from sklearn.metrics import make_scorer, mean_squared_error
 from optuna.trial import Trial
@@ -19,6 +19,22 @@ from src.utils.logger import get_logger
 from src.utils.model_utils import load_best_params, save_best_params
 
 logger = get_logger(__name__)
+
+
+class CrossValidatorProtocol(Protocol):
+    def split(self, X: pd.DataFrame, y: Optional[pd.Series] = None, groups: Any = None) -> Any:
+        ...
+
+    def get_n_splits(
+        self,
+        X: Optional[pd.DataFrame] = None,
+        y: Optional[pd.Series] = None,
+        groups: Any = None,
+    ) -> int:
+        ...
+
+
+CrossValidatorLike = Union[int, CrossValidatorProtocol]
 
 
 class ModelTrainer:
@@ -193,7 +209,7 @@ class ModelTrainer:
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        cv: int = 5,
+        cv: CrossValidatorLike = 5,
         scoring: str = "neg_root_mean_squared_error",
     ) -> Dict[str, Any]:
         """
@@ -202,13 +218,14 @@ class ModelTrainer:
         Args:
             X: Features DataFrame
             y: Target Series
-            cv: Number of folds
+            cv: Number of folds or cross-validator splitter
             scoring: Scoring metric (default: negative RMSE)
 
         Returns:
             Dictionary with cross-validation results
         """
-        logger.info(f"Starting {cv}-fold cross-validation")
+        n_folds = cv if isinstance(cv, int) and not isinstance(cv, bool) else cv.get_n_splits(X, y)
+        logger.info(f"Starting {n_folds}-fold cross-validation")
 
         # Create a fresh model for cross-validation WITHOUT early_stopping_rounds
         # sklearn's cross_val_score doesn't pass eval_set, which XGBoost requires
@@ -244,7 +261,7 @@ class ModelTrainer:
             "max_cv_score": np.max(cv_scores),
             "min_cv_score": np.min(cv_scores),
             "cv_time": cv_time,
-            "n_folds": cv,
+            "n_folds": n_folds,
         }
 
         logger.info(f"Cross-validation completed in {cv_time:.2f} seconds")
@@ -259,7 +276,7 @@ class ModelTrainer:
         self,
         X: pd.DataFrame,
         y: pd.Series,
-        cv: int = 5,
+        cv: CrossValidatorLike = 5,
         n_trials: Optional[int] = None,
         study_name: str = "xgboost_optimization",
         storage_url: str = "sqlite:///logs/optuna_study.db",
@@ -272,7 +289,7 @@ class ModelTrainer:
         Args:
             X: Features DataFrame
             y: Target Series
-            cv: Number of folds for cross-validation
+            cv: Number of folds or cross-validator splitter
             n_trials: Number of optimization trials (uses instance default if None)
             study_name: Optuna study name
             storage_url: Optuna storage URL
@@ -333,14 +350,18 @@ class ModelTrainer:
             }
 
             # Use cross-validation for evaluation
-            kf = KFold(
-                n_splits=cv,
-                shuffle=True,
-                random_state=self.params.get("random_state", 42),
+            cv_splitter = (
+                KFold(
+                    n_splits=cv,
+                    shuffle=True,
+                    random_state=self.params.get("random_state", 42),
+                )
+                if isinstance(cv, int) and not isinstance(cv, bool)
+                else cv
             )
             scores: List[float] = []
 
-            for train_idx, val_idx in kf.split(X):
+            for train_idx, val_idx in cv_splitter.split(X, y):
                 X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
                 y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
 

@@ -22,11 +22,11 @@ import re
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold, train_test_split
 
 from src.utils.logger import setup_logger
 from src.data_loader import DataLoader
@@ -61,13 +61,17 @@ XGB_PARAM_KEYS = {
 REQUIRED_MODEL_PARAM_KEYS = XGB_PARAM_KEYS.copy()
 
 
-def load_config(config_path: str):
+def load_config(config_path: str) -> Dict[str, Any]:
     """Load configuration from YAML file."""
     import yaml
 
     with open(config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    return config
+
+    if not isinstance(config, dict):
+        raise ValueError("Configuration file must contain a YAML mapping at the top level")
+
+    return cast(Dict[str, Any], config)
 
 
 def _file_sha256(file_path: str) -> str:
@@ -152,7 +156,29 @@ def get_cv_n_splits(cv_config: Dict[str, Any]) -> int:
     return n_splits
 
 
-def train_model(config_path: str, output_dir: str = None) -> dict:
+def build_cv_splitter(cv_config: Dict[str, Any]) -> KFold:
+    """Build a KFold splitter from config.cv settings."""
+    n_splits = get_cv_n_splits(cv_config)
+    shuffle = cv_config.get("shuffle", False)
+    random_state = cv_config.get("random_state")
+
+    if not isinstance(shuffle, bool):
+        raise ValueError("config.cv.shuffle must be a boolean")
+
+    if isinstance(random_state, bool) or (
+        random_state is not None and not isinstance(random_state, int)
+    ):
+        raise ValueError("config.cv.random_state must be an integer or null")
+
+    splitter_random_state = random_state if shuffle else None
+    return KFold(
+        n_splits=n_splits,
+        shuffle=shuffle,
+        random_state=splitter_random_state,
+    )
+
+
+def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str, Any]:
     """
     Execute complete training pipeline.
 
@@ -177,10 +203,10 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         logger.info(f"Configuration loaded from {config_path}")
 
         # Extract paths and parameters
-        data_config = config.get("data", {})
-        model_config = config.get("model", {})
-        cv_config = config.get("cv", {})
-        output_config = config.get("paths", {})
+        data_config = cast(Dict[str, Any], config.get("data", {}))
+        model_config = cast(Dict[str, Any], config.get("model", {}))
+        cv_config = cast(Dict[str, Any], config.get("cv", {}))
+        output_config = cast(Dict[str, Any], config.get("paths", {}))
 
         data_path = data_config.get("file_path")
         target_column = data_config.get("target_column", "K")
@@ -191,6 +217,8 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         # Set output directory
         if output_dir is None:
             output_dir = output_config.get("output_dir", "output")
+
+        output_dir = cast(str, output_dir)
 
         logger.info(f"Output directory: {output_dir}")
         logger.info(f"Data file: {data_path}")
@@ -229,6 +257,8 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
 
         # Save original target values (for inverse transform evaluation)
         target_raw = data_loader.target_raw
+        if target_raw is None:
+            raise ValueError("DataLoader did not preserve raw target values")
 
         logger.info(
             f"Data loaded: {len(features)} samples, {len(features.columns)} features"
@@ -240,14 +270,28 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         random_state = data_config.get("random_state", 42)
 
         # Split transformed target (for model training)
-        X_train_full, X_test, y_train_trans_full, y_test_trans = train_test_split(
-            features, target_transformed, test_size=test_size, random_state=random_state
+        train_test_split_result = cast(
+            Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+            train_test_split(
+                features,
+                target_transformed,
+                test_size=test_size,
+                random_state=random_state,
+            ),
         )
+        X_train_full, X_test, y_train_trans_full, y_test_trans = train_test_split_result
 
         # Also split original target values (for original space evaluation)
-        _, _, y_train_orig_full, y_test_orig = train_test_split(
-            features, target_raw, test_size=test_size, random_state=random_state
+        raw_split_result = cast(
+            Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+            train_test_split(
+                features,
+                target_raw,
+                test_size=test_size,
+                random_state=random_state,
+            ),
         )
+        _, _, y_train_orig_full, y_test_orig = raw_split_result
 
         logger.info(
             f"Training set: {len(X_train_full)} samples ({(1 - test_size) * 100:.0f}%)"
@@ -256,20 +300,30 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
 
         # Step 2.6: Split training data into train/validation sets for early stopping
         validation_size = model_config.get("validation_size", 0.1)
-        X_val = y_val_trans = y_val_orig = None
+        X_val: Optional[pd.DataFrame] = None
+        y_val_trans: Optional[pd.Series] = None
         if validation_size and validation_size > 0:
             logger.info(
                 "\nStep 2.6: Splitting training data into train/validation sets..."
             )
-            X_train, X_val, y_train_trans, y_val_trans, y_train_orig, y_val_orig = (
+            split_result = cast(
+                Tuple[
+                    pd.DataFrame,
+                    pd.DataFrame,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                ],
                 train_test_split(
                     X_train_full,
                     y_train_trans_full,
                     y_train_orig_full,
                     test_size=validation_size,
                     random_state=random_state,
-                )
+                ),
             )
+            X_train, X_val, y_train_trans, y_val_trans, _, _ = split_result
             logger.info(
                 f"Training subset: {len(X_train)} samples ({(1 - validation_size) * 100:.0f}%)"
             )
@@ -279,7 +333,6 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         else:
             X_train = X_train_full
             y_train_trans = y_train_trans_full
-            y_train_orig = y_train_orig_full
 
         # Step 3: Preprocess data (FIT ON TRAINING DATA ONLY - CRITICAL FIX)
         logger.info("\nStep 3: Preprocessing data...")
@@ -316,7 +369,7 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
             "optuna_storage_url", "sqlite:///logs/optuna_study.db"
         )
         best_params_path = model_config.get("best_params_path", "logs/best_params.json")
-        cv_n_splits = get_cv_n_splits(cv_config)
+        cv_splitter = build_cv_splitter(cv_config)
 
         # Prepare XGBoost parameters (strictly from model.params)
         xgb_params = build_xgb_params(model_config)
@@ -334,7 +387,9 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         )
 
         eval_set = (
-            [(X_val_processed, y_val_trans)] if X_val_processed is not None else None
+            [(X_val_processed, y_val_trans)]
+            if X_val_processed is not None and y_val_trans is not None
+            else None
         )
         params_source = (
             "best_params_file" if trainer.loaded_best_params else "config_model_params"
@@ -347,7 +402,7 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
             opt_results = trainer.optimize_hyperparameters(
                 X_train_processed,
                 y_train_trans,  # Training data only
-                cv=cv_n_splits,
+                cv=cv_splitter,
                 study_name=study_name,
                 storage_url=optuna_storage_url,
                 best_params_output_path=best_params_path,
@@ -381,7 +436,7 @@ def train_model(config_path: str, output_dir: str = None) -> dict:
         cv_results = trainer.cross_validate(
             X_train_processed,
             y_train_trans,  # Training data only
-            cv=cv_n_splits,
+            cv=cv_splitter,
         )
         logger.info(
             f"Cross-validation RMSE: {cv_results['mean_cv_score']:.4f} (+/- {cv_results['std_cv_score']:.4f})"
