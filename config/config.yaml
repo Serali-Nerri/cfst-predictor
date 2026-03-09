@@ -3,7 +3,7 @@
 # Data configuration
 data:
   # Input data file path
-  file_path: "data/raw/feature_parameters_unique.csv"
+  file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
 
   # Target column name (label)
   target_column: "Nexp (kN)"
@@ -32,38 +32,38 @@ data:
 # XGBoost model parameters
 model:
   # XGBoost hyperparameters - Optuna baseline center point
-  # Start from a more conservative region to suppress overfitting.
-  # These are now the single source of truth used by train.py.
+  # Re-centered for the 2026-03-09 processed 11.8k-sample dataset.
+  # These are the single source of truth used by train.py.
   params:
     # Learning objective
     objective: "reg:squarederror"
 
     # Maximum depth of trees
-    max_depth: 4
+    max_depth: 6
 
     # Learning rate
-    learning_rate: 0.03
+    learning_rate: 0.045
 
     # Number of boosting rounds
-    n_estimators: 2200
+    n_estimators: 4200
 
     # Row subsampling
-    subsample: 0.75
+    subsample: 0.68
 
     # Column subsampling
-    colsample_bytree: 0.6
+    colsample_bytree: 0.48
 
     # Minimum child weight
-    min_child_weight: 18
+    min_child_weight: 10
 
     # L1 regularization
-    reg_alpha: 1.0
+    reg_alpha: 0.05
 
     # L2 regularization
-    reg_lambda: 8.0
+    reg_lambda: 1.2
 
     # Minimum loss reduction
-    gamma: 0.15
+    gamma: 0.003
 
     # Random seed
     random_state: 42
