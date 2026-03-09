@@ -13,12 +13,27 @@ from sklearn.metrics import make_scorer, mean_squared_error
 from optuna.trial import Trial
 import time
 import json
+import os
 from pathlib import Path
 
 from src.utils.logger import get_logger
 from src.utils.model_utils import load_best_params, save_best_params
 
 logger = get_logger(__name__)
+
+TUNABLE_PARAM_KEYS = (
+    "max_depth",
+    "learning_rate",
+    "n_estimators",
+    "subsample",
+    "colsample_bytree",
+    "min_child_weight",
+    "reg_alpha",
+    "reg_lambda",
+    "gamma",
+)
+
+OPTUNA_SEARCH_SPACE_VERSION = "centered_v2_parallel_cv"
 
 
 class CrossValidatorProtocol(Protocol):
@@ -107,6 +122,111 @@ class ModelTrainer:
             "tree_method": "hist",
             "device": "cpu",
             "n_jobs": -1,  # Use all CPU cores
+        }
+
+    def get_optuna_center_point(self) -> Dict[str, Any]:
+        """
+        Return the current Optuna center point derived from model params.
+        """
+        return {
+            "max_depth": int(self.params.get("max_depth", 5)),
+            "learning_rate": float(self.params.get("learning_rate", 0.05)),
+            "n_estimators": int(self.params.get("n_estimators", 1200)),
+            "subsample": float(self.params.get("subsample", 0.8)),
+            "colsample_bytree": float(self.params.get("colsample_bytree", 0.75)),
+            "min_child_weight": int(self.params.get("min_child_weight", 10)),
+            "reg_alpha": float(self.params.get("reg_alpha", 0.5)),
+            "reg_lambda": float(self.params.get("reg_lambda", 2.0)),
+            "gamma": float(self.params.get("gamma", 0.05)),
+        }
+
+    def get_optuna_search_space(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Build an Optuna search space centered on config.model.params.
+        """
+        center = self.get_optuna_center_point()
+
+        search_space: Dict[str, Dict[str, Any]] = {
+            "max_depth": {
+                "kind": "int",
+                "low": max(3, center["max_depth"] - 1),
+                "high": min(8, center["max_depth"] + 2),
+            },
+            "learning_rate": {
+                "kind": "float",
+                "low": max(0.01, center["learning_rate"] / 2.5),
+                "high": min(0.12, max(center["learning_rate"] * 1.8, 0.02)),
+                "log": True,
+            },
+            "n_estimators": {
+                "kind": "int",
+                "low": max(800, int(round(center["n_estimators"] * 0.6))),
+                "high": min(4500, int(round(center["n_estimators"] * 2.2))),
+            },
+            "subsample": {
+                "kind": "float",
+                "low": max(0.55, center["subsample"] - 0.18),
+                "high": min(0.98, center["subsample"] + 0.08),
+            },
+            "colsample_bytree": {
+                "kind": "float",
+                "low": max(0.4, center["colsample_bytree"] - 0.18),
+                "high": min(0.95, center["colsample_bytree"] + 0.12),
+            },
+            "min_child_weight": {
+                "kind": "int",
+                "low": max(4, int(round(center["min_child_weight"] * 0.6))),
+                "high": min(40, int(round(center["min_child_weight"] * 2.0))),
+            },
+            "reg_alpha": {
+                "kind": "float",
+                "low": max(1e-3, center["reg_alpha"] / 20.0),
+                "high": min(20.0, max(center["reg_alpha"] * 20.0, 1e-2)),
+                "log": True,
+            },
+            "reg_lambda": {
+                "kind": "float",
+                "low": max(1e-2, center["reg_lambda"] / 15.0),
+                "high": min(50.0, max(center["reg_lambda"] * 15.0, 0.1)),
+                "log": True,
+            },
+            "gamma": {
+                "kind": "float",
+                "low": max(1e-4, center["gamma"] / 30.0),
+                "high": min(5.0, max(center["gamma"] * 20.0, 1e-3)),
+                "log": True,
+            },
+        }
+
+        return search_space
+
+    def build_optuna_trial_params(self, trial: Trial) -> Dict[str, Any]:
+        """
+        Sample one Optuna trial from the centered search space.
+        """
+        search_space = self.get_optuna_search_space()
+        tuned_params: Dict[str, Any] = {}
+
+        for name, spec in search_space.items():
+            if spec["kind"] == "int":
+                tuned_params[name] = trial.suggest_int(
+                    name, int(spec["low"]), int(spec["high"])
+                )
+            else:
+                tuned_params[name] = trial.suggest_float(
+                    name,
+                    float(spec["low"]),
+                    float(spec["high"]),
+                    log=bool(spec.get("log", False)),
+                )
+
+        return {
+            "objective": self.params.get("objective", "reg:squarederror"),
+            **tuned_params,
+            "random_state": self.params.get("random_state", 42),
+            "tree_method": self.params.get("tree_method", "hist"),
+            "device": self.params.get("device", "cpu"),
+            "n_jobs": self.params.get("n_jobs", -1),
         }
 
     def train(
@@ -319,70 +439,81 @@ class ModelTrainer:
             f"Starting Optuna hyperparameter optimization with {n_trials} trials"
         )
         logger.info(f"Optimization timeout: {self.optuna_timeout} seconds")
+        logger.info(f"Optuna strategy version: {OPTUNA_SEARCH_SPACE_VERSION}")
+
+        center_point = self.get_optuna_center_point()
+        search_space = self.get_optuna_search_space()
+        logger.info(f"Optuna center point: {json.dumps(center_point, sort_keys=True)}")
+        logger.info(f"Optuna search space: {json.dumps(search_space, sort_keys=True)}")
 
         # Create logs directory if it doesn't exist
         Path("logs").mkdir(parents=True, exist_ok=True)
 
         context_hash = run_context.get("context_hash") if run_context else None
         data_file = run_context.get("data_file") if run_context else None
+        cv_splitter = (
+            KFold(
+                n_splits=cv,
+                shuffle=True,
+                random_state=self.params.get("random_state", 42),
+            )
+            if isinstance(cv, int) and not isinstance(cv, bool)
+            else cv
+        )
+        n_folds = (
+            cv if isinstance(cv, int) and not isinstance(cv, bool) else cv_splitter.get_n_splits(X, y)
+        )
+
+        cpu_count = max(1, os.cpu_count() or 1)
+        if self.params.get("device") == "cuda":
+            objective_cv_n_jobs = 1
+            objective_model_n_jobs = 1
+        else:
+            objective_cv_n_jobs = min(n_folds, cpu_count)
+            objective_model_n_jobs = max(1, cpu_count // objective_cv_n_jobs)
+
+        rmse_scorer = make_scorer(
+            lambda y_true, y_pred: -np.sqrt(mean_squared_error(y_true, y_pred))
+        )
+        logger.info(
+            "Optuna CV execution: "
+            f"{n_folds} folds, cv_n_jobs={objective_cv_n_jobs}, "
+            f"model_n_jobs={objective_model_n_jobs}"
+        )
 
         # Define objective function for Optuna
         def objective(trial: Trial) -> float:
-            # Search space tuned for larger dataset with long-tail target distribution.
-            params = {
-                "objective": self.params.get("objective", "reg:squarederror"),
-                "max_depth": trial.suggest_int("max_depth", 3, 8),
-                "learning_rate": trial.suggest_float(
-                    "learning_rate", 0.015, 0.12, log=True
-                ),
-                "n_estimators": trial.suggest_int("n_estimators", 800, 4000),
-                "subsample": trial.suggest_float("subsample", 0.6, 0.95),
-                "colsample_bytree": trial.suggest_float("colsample_bytree", 0.5, 0.95),
-                "min_child_weight": trial.suggest_int("min_child_weight", 4, 30),
-                "reg_alpha": trial.suggest_float("reg_alpha", 1e-3, 10.0, log=True),
-                "reg_lambda": trial.suggest_float("reg_lambda", 1e-2, 30.0, log=True),
-                "gamma": trial.suggest_float("gamma", 1e-4, 1.0, log=True),
-                # Fixed parameters
-                "random_state": self.params.get("random_state", 42),
-                "tree_method": self.params.get("tree_method", "hist"),
-                "device": self.params.get("device", "cpu"),
-                "n_jobs": self.params.get("n_jobs", -1),
-            }
-
-            # Use cross-validation for evaluation
-            cv_splitter = (
-                KFold(
-                    n_splits=cv,
-                    shuffle=True,
-                    random_state=self.params.get("random_state", 42),
-                )
-                if isinstance(cv, int) and not isinstance(cv, bool)
-                else cv
+            params = self.build_optuna_trial_params(trial)
+            params["n_jobs"] = objective_model_n_jobs
+            cv_model = xgb.XGBRegressor(**params)
+            cv_scores = cross_val_score(
+                cv_model,
+                X,
+                y,
+                cv=cv_splitter,
+                scoring=rmse_scorer,
+                n_jobs=objective_cv_n_jobs,
+                verbose=0,
             )
-            scores: List[float] = []
 
-            for train_idx, val_idx in cv_splitter.split(X, y):
-                X_train_cv, X_val_cv = X.iloc[train_idx], X.iloc[val_idx]
-                y_train_cv, y_val_cv = y.iloc[train_idx], y.iloc[val_idx]
-
-                model_fit = xgb.XGBRegressor(**params)
-                model_fit.fit(X_train_cv, y_train_cv, verbose=False)
-
-                # Predict and calculate RMSE
-                y_pred = model_fit.predict(X_val_cv)
-                rmse = float(np.sqrt(mean_squared_error(y_val_cv, y_pred)))
-                scores.append(rmse)
-
-            return float(np.mean(scores))
+            return float(-np.mean(cv_scores))
 
         # Create Optuna study with persistent storage
+        sampler = optuna.samplers.TPESampler(
+            seed=self.params.get("random_state", 42),
+            multivariate=True,
+        )
         study = optuna.create_study(
             direction="minimize",
             study_name=study_name,
             storage=storage_url,
             load_if_exists=True,
+            sampler=sampler,
         )
         n_trials_before = len(study.trials)
+        if n_trials_before == 0:
+            study.enqueue_trial(center_point)
+            logger.info("Enqueued config center point as the first Optuna trial")
 
         # Run optimization
         start_time = time.time()

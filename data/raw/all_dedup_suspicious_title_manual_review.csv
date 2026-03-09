@@ -1,0 +1,38 @@
+﻿title,decision,reason,rows_in_current_cleaned,rows_in_gap_suspicious_file
+"Advanced Engineering Sciences | 高强钢管约束自应力混凝土短柱轴压性能试验 (Test on Axial Compression Performance of High-strength Steel Tube Confined Self-stress Concrete Short Column) | ZHENG Yuzhou, CHEN Li, ZHU Xiaolong... | 2022",remove,自应力混凝土带主动约束/预应力效应，属于特殊体系。,7,3
+"Axial Compression Behavior of the Stiffened Concrete-Filled Thin-Walled High-Strength Square Steel Tube Stub Columns, YANG Youfu; GUO Hongxin, Journal of South China University of Technology (Natural Science Edition), 2021",remove,stiffened thin-walled，属于特殊加劲构件。,14,7
+"Axial load behavior of square CFT stub column with binding bars, Jian Cai; Zhen-Qiang He, Unknown, 2005",remove,binding bars 属于特殊内部构造/加劲。,14,14
+"Axial performance of short concrete filled steel tubes with high- and ultra-high- strength materials, Ming-Xiang Xiong; De-Xin Xiong; J.Y. Richard Liew, Engineering Structures, 2017",keep,高强材料变体，不是显式非标准工况。,49,8
+"Bias compression bearing capacity research of thin-walled square steel tube composite columns filled with demolished concrete lump, Unknown, Unknown, 2006",keep,按当前较窄口径视为材料变体下的普通偏压研究。,12,4
+"Confinement of six different concretes in CFST columns having different shapes and slenderness, Khandaker M. A. Hossain; Katie Chu, Unknown, 2019",keep,混凝土类型、截面形状、长细比变化，仍属常规试验范围。,46,2
+"Design of Concrete Filled Tubular Beam-columns with High Strength Steel and Concrete, J.Y. Richard Liew; Mingxiang Xiong; Dexin Xiong, Structures, 2016",keep,高强材料/beam-column 本身不构成非标准工况。,36,2
+"Engineering Structures | A unified formulation for circle and polygon concrete-filled steel tube columns under axial compression | Min Yu, Xiaoxiong Zha, Jianqiao Ye... | 2013",keep,普通轴压与截面形状变化，按当前口径保留。,12,12
+"Engineering Structures | Experimental behaviour of concrete-filled double-skin corrugated steel tubes under eccentric compression | Bo Lu, Hua Yang, Yong Fang | 2025",remove,double-skin corrugated steel tubes 是特殊双层波纹钢管体系。,11,8
+"Experimental behavior of circular concrete-filled steel tube stub columns, Zhi-wu Yu; Fa-xing Ding; C.S. Cai, Unknown, 2006",keep,普通圆钢管混凝土短柱试验，没有显式特殊工况。,17,2
+"Experimental behaviour of tapered CFST columns under combined compression and bending, Qing-Xin Ren; Lin-Hai Han; Chao Hou; You-Xing Hua, Journal of Constructional Steel Research, 2017",remove,tapered 变截面柱，沿长向几何变化未被当前列完整编码。,16,2
+"Experimental behaviour of tapered CFST columns under combined compression and bending, Qing-Xin Ren; Lin-Hai Han; Chao Hou; You-Xing Hua, Unknown, 2016",remove,tapered 变截面柱，沿长向几何变化未被当前列完整编码。,20,2
+"Journal of Building Engineering | Eccentric loading behavior of square PBL-stiffened double-skin sandwich composite slender columns | Zhongqi Chen, Zhansheng Lin, Zhao Xu... | 2025",remove,PBL-stiffened + double-skin sandwich + slender columns，明显属于特殊体系。,6,3
+"Journal of Constructional Steel Research | Axial compressive behavior of high-strength concrete-filled steel tube with multiple confinement effects | Fei Yin, Ji-Wei Si, Ru-Wei Wang, Wan-Lin Cao, Zheng Chen | 2024",remove,multiple confinement effects 属于特殊约束体系。,5,5
+"Journal of Constructional Steel Research | Performance of spirally reinforced high-strength circular CFST column under eccentric compression | Wei-Jie Li, Wei Li | 2024",remove,spirally reinforced 明确是特殊配筋/加劲。,8,4
+"Mechanical Behavior of Circular Steel-Concrete Composite Stub Columns, Mathias Johansson; Kent Gylltoft, Journal of Structural Engineering, 2002",keep,普通圆形组合短柱受压研究，没有显式特殊工况。,3,3
+"Mechanical behavior of spiral stirrup reinforced concrete filled square steel tubular columns under compression, Zongping Chen; Ji Zhou; Chenggui Jing; Qiuhong Tan, Engineering Structures, 2021",remove,spiral stirrup reinforced 明确是特殊配筋构造。,47,20
+"Mechanism Study on the Axial Compressive Performance of Short Square CFST Columns with Different Stiffeners, Bing Xu; Fahong Wu; Guizhong Xu, Advances in Civil Engineering, 2018",remove,different stiffeners 属于特殊加劲构件。,9,3
+"Research on Compression Behavior of Square Thin-Walled CFST Columns with Steel-Bar Stiffeners, Zhao Yang; Chengxiang Xu, Unknown, 2018",remove,steel-bar stiffeners 属于特殊加劲构件。,5,5
+"Researches on Behavior of High-Performance Concrete Filled Tubular Steel Short Columns, Z. W. Yu; F. X. Ding; S. Lin, Journal of Building Structures, 2002",keep,普通高性能混凝土短柱，按材料变体处理。,28,4
+"STRENGTH OF CONCRETE FILLED STEEL BOX COLUMNNS INCORPORATING LOCAL BUCKLING, Brian Uy, Journal of Structural Engineering, 2000",remove,标题明确包含 local buckling，属于未编码的局部失稳/特殊受力情形。,25,13
+"Structural behavior of concrete-filled steel tube short columns stiffened by external and internal continuous spirals, Salih K. Alrebeh; Talha Ekmekyapar, Structures, 2019",remove,外/内连续螺旋加劲，属于特殊构造。,16,16
+"Structural performance of welded built-up square CFST stub columns, Seong-Hui Lee; Young-Hwan Choi; Young-Ho Kim; Sung-Mo Choi, Thin-Walled Structures, 2012",remove,welded built-up 属于特殊拼焊构件。,10,4
+"Structures | Experimental and theoretical study on the eccentric compression performance of novel L-shaped composite columns composed of HGM-filled square steel tubes | Zhou Yan, Lei Honggang | 2025",remove,novel L-shaped composite columns 属于特殊组合构件。,9,7
+"Unknown, Railway Engineering, 2011",uncertain,标题缺失，无法仅凭 Ref.No. 定性；但试件族与“脱空钢管混凝土构件力学性能研究”高度同源，强烈怀疑也是脱空/空鼓类缺陷研究。,30,8
+"Yu Z, Ding F, Lin S. Researches on behavior of high-performance concrete filled tubular steel short columns. Journal of Building Structure 2002;23(2):
+41 7 [in Chinese].",keep,与同名中文引文变体一致，属于普通高性能混凝土短柱研究。,28,4
+"大尺寸钢管混凝土柱承载力试验, 陈彦江; 李勇; 闫维明; 潘迪, Unknown, 2011",keep,大尺寸主要是尺度变化，尺寸列可表达。,10,4
+"局部腐蚀对圆钢管混凝土压弯构件力学性能影响的研究, 张锐, 华东交通大学硕士学位论文, 2021",remove,局部腐蚀是明确的特殊退化工况。,42,6
+"建筑结构学报 Journal of Building Structures | 钢管高强再生混凝土柱轴压性能试验研究 | 牛海成, 曹万林, 董宏英... | 2015",keep,更像再生混凝土材料变体下的普通轴压，按当前口径保留。,5,2
+"建筑结构学报 | 内填料石钢管混凝土中长柱轴压性能试验研究 | 谢菁, 叶勇, 刘阳... | 2023",remove,内填料石属于特殊填充/特殊构件体系。,12,12
+"建筑结构学报 | 衬管加劲薄壁方钢管混凝土柱偏压性能及承载力研究 | 王宣鼎, 刘界鹏, 周绪红... | 2024",remove,衬管加劲薄壁方钢管混凝土柱是特殊加劲构件。,8,3
+"桥梁建设 | 纵筋配筋率对配筋钢管混凝土柱受压性能的影响 | 阿里甫江·夏木西, 麦麦提亚森·麦麦提敏, 刘晓蕊 | 2020",remove,配筋钢管混凝土柱属于特殊配筋构件。,13,13
+"混凝土密实度对矩形钢管混凝土短柱力学性能影响研究, 杨有福; 韩林海, Unknown, 0",remove,混凝土密实度对应填充质量/缺陷，不是标准工况。,16,4
+"脱空钢管混凝土构件力学性能研究, 唐述, Guangzhou University, 2011",remove,脱空属于明确缺陷工况。,13,6
+"负载下内填混凝土加固钢管构件轴压性能试验研究, 杜新喜; 蔡宗洋; 程晓燕; 熊亮; 袁焕鑫, 建筑结构学报, 2015",remove,负载下加固属于修复/加固工况。,15,5
+"高温后不同截面钢管混凝土轴压构件的实验研究, 姜绍飞; 刘明, Unknown, 2002",remove,高温后/火后工况，应剔除。,30,30

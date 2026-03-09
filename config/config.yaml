@@ -31,38 +31,39 @@ data:
 
 # XGBoost model parameters
 model:
-  # XGBoost hyperparameters - baseline center point
+  # XGBoost hyperparameters - Optuna baseline center point
+  # Start from a more conservative region to suppress overfitting.
   # These are now the single source of truth used by train.py.
   params:
     # Learning objective
     objective: "reg:squarederror"
 
     # Maximum depth of trees
-    max_depth: 5
+    max_depth: 4
 
     # Learning rate
-    learning_rate: 0.05
+    learning_rate: 0.03
 
     # Number of boosting rounds
-    n_estimators: 1200
+    n_estimators: 2200
 
     # Row subsampling
-    subsample: 0.8
+    subsample: 0.75
 
     # Column subsampling
-    colsample_bytree: 0.75
+    colsample_bytree: 0.6
 
     # Minimum child weight
-    min_child_weight: 10
+    min_child_weight: 18
 
     # L1 regularization
-    reg_alpha: 0.5
+    reg_alpha: 1.0
 
     # L2 regularization
-    reg_lambda: 2.0
+    reg_lambda: 8.0
 
     # Minimum loss reduction
-    gamma: 0.05
+    gamma: 0.15
 
     # Random seed
     random_state: 42

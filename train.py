@@ -31,7 +31,7 @@ from sklearn.model_selection import KFold, train_test_split
 from src.utils.logger import setup_logger
 from src.data_loader import DataLoader
 from src.preprocessor import Preprocessor
-from src.model_trainer import ModelTrainer
+from src.model_trainer import ModelTrainer, OPTUNA_SEARCH_SPACE_VERSION
 from src.evaluator import Evaluator
 from src.utils.model_utils import save_model
 from src.visualizer import (
@@ -113,6 +113,33 @@ def build_study_name(data_file_path: str, context_hash: str) -> str:
     dataset_stem = Path(data_file_path).stem
     sanitized_stem = re.sub(r"[^A-Za-z0-9_]+", "_", dataset_stem).strip("_")
     return f"xgboost_optimization__{sanitized_stem}__{context_hash}"
+
+
+def build_optuna_tuning_fingerprint(
+    model_params: Dict[str, Any], cv_config: Dict[str, Any]
+) -> str:
+    """Build a deterministic fingerprint for the Optuna tuning strategy."""
+    fingerprint_payload = {
+        "search_space_version": OPTUNA_SEARCH_SPACE_VERSION,
+        "model_params": model_params,
+        "cv": {
+            "n_splits": get_cv_n_splits(cv_config),
+            "shuffle": cv_config.get("shuffle", False),
+            "random_state": cv_config.get("random_state"),
+        },
+    }
+    fingerprint_json = json.dumps(
+        fingerprint_payload, sort_keys=True, ensure_ascii=True
+    ).encode("utf-8")
+    return hashlib.sha256(fingerprint_json).hexdigest()[:10]
+
+
+def build_versioned_study_name(
+    data_file_path: str, context_hash: str, tuning_fingerprint: str
+) -> str:
+    """Build an Optuna study name isolated by data context and tuning strategy."""
+    base_study_name = build_study_name(data_file_path, context_hash)
+    return f"{base_study_name}__{tuning_fingerprint}"
 
 
 def build_xgb_params(model_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -236,6 +263,9 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         if target_transform_type:
             logger.info(f"Target transform enabled: {target_transform_type}")
 
+        # Validate XGBoost params early so study naming matches the real tuning config.
+        xgb_params = build_xgb_params(model_config)
+
         training_context = build_training_context(
             data_file_path=data_path,
             target_column=target_column,
@@ -243,8 +273,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             columns_to_drop=columns_to_drop,
         )
         context_hash = training_context["context_hash"]
-        study_name = build_study_name(data_path, context_hash)
+        tuning_fingerprint = build_optuna_tuning_fingerprint(xgb_params, cv_config)
+        study_name = build_versioned_study_name(
+            data_path, context_hash, tuning_fingerprint
+        )
         logger.info(f"Training context hash: {context_hash}")
+        logger.info(f"Optuna strategy version: {OPTUNA_SEARCH_SPACE_VERSION}")
+        logger.info(f"Optuna tuning fingerprint: {tuning_fingerprint}")
         logger.info(f"Optuna study name: {study_name}")
 
         # Step 2: Load data
@@ -370,9 +405,6 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         best_params_path = model_config.get("best_params_path", "logs/best_params.json")
         cv_splitter = build_cv_splitter(cv_config)
-
-        # Prepare XGBoost parameters (strictly from model.params)
-        xgb_params = build_xgb_params(model_config)
 
         early_stopping_rounds = model_config.get("early_stopping_rounds")
         eval_metric = model_config.get("eval_metric")
