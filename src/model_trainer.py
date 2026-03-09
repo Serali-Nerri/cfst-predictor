@@ -8,8 +8,8 @@ import xgboost as xgb
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple, Optional, List, Any, Protocol, Union, cast
-from sklearn.model_selection import KFold, cross_val_score
-from sklearn.metrics import make_scorer, mean_squared_error
+from sklearn.model_selection import KFold, train_test_split
+from sklearn.metrics import mean_squared_error
 from optuna.trial import Trial
 import time
 import json
@@ -18,6 +18,7 @@ from pathlib import Path
 
 from src.utils.logger import get_logger
 from src.utils.model_utils import load_best_params, save_best_params
+from src.preprocessor import Preprocessor
 
 logger = get_logger(__name__)
 
@@ -33,7 +34,49 @@ TUNABLE_PARAM_KEYS = (
     "gamma",
 )
 
-OPTUNA_SEARCH_SPACE_VERSION = "centered_v2_parallel_cv"
+OPTUNA_SEARCH_SPACE_VERSION = "centered_v4_stratified_consistent_cv"
+VALID_METRIC_SPACES = {"transformed", "original"}
+
+
+def _normalize_metric_space(metric_space: Optional[str]) -> str:
+    """Normalize metric space names used by CV and Optuna scoring."""
+    normalized = (metric_space or "transformed").strip().lower()
+    if normalized not in VALID_METRIC_SPACES:
+        raise ValueError(
+            f"Unsupported metric space '{metric_space}'. "
+            f"Expected one of {sorted(VALID_METRIC_SPACES)}."
+        )
+    return normalized
+
+
+def _inverse_transform_target(
+    values: Union[pd.Series, np.ndarray], target_transform_type: Optional[str]
+) -> np.ndarray:
+    """Convert transformed target values back into the original target space."""
+    array = np.asarray(values, dtype=float).reshape(-1)
+    if target_transform_type == "log":
+        return np.exp(array)
+    if target_transform_type == "sqrt":
+        return np.square(array)
+    return array
+
+
+def _negative_rmse_score(
+    y_true: Union[pd.Series, np.ndarray],
+    y_pred: Union[pd.Series, np.ndarray],
+    metric_space: str = "transformed",
+    target_transform_type: Optional[str] = None,
+) -> float:
+    """Return negative RMSE so sklearn/Optuna can maximize the scorer."""
+    normalized_space = _normalize_metric_space(metric_space)
+    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
+
+    if normalized_space == "original":
+        y_true_array = _inverse_transform_target(y_true_array, target_transform_type)
+        y_pred_array = _inverse_transform_target(y_pred_array, target_transform_type)
+
+    return -float(np.sqrt(mean_squared_error(y_true_array, y_pred_array)))
 
 
 class CrossValidatorProtocol(Protocol):
@@ -67,6 +110,12 @@ class ModelTrainer:
         optuna_timeout: int = 3600,
         best_params_path: str = "logs/best_params.json",
         expected_context_hash: Optional[str] = None,
+        optuna_metric_space: str = "transformed",
+        target_transform_type: Optional[str] = None,
+        columns_to_drop: Optional[List[str]] = None,
+        validation_size: float = 0.0,
+        early_stopping_rounds: Optional[int] = None,
+        eval_metric: Optional[str] = None,
     ):
         """
         Initialize ModelTrainer.
@@ -78,6 +127,12 @@ class ModelTrainer:
             optuna_timeout: Timeout for Optuna optimization in seconds
             best_params_path: Path to persisted best parameters JSON
             expected_context_hash: Expected training context hash for safe parameter reuse
+            optuna_metric_space: RMSE scoring space for Optuna ('transformed' or 'original')
+            target_transform_type: Target transform applied before model fitting
+            columns_to_drop: Columns removed by the preprocessor
+            validation_size: Fold-internal validation share used for early stopping
+            early_stopping_rounds: Early stopping rounds for fold/internal validation
+            eval_metric: XGBoost eval metric used when validation is available
         """
         self.params = params or self._get_default_params()
         self.use_optuna = use_optuna
@@ -85,6 +140,12 @@ class ModelTrainer:
         self.optuna_timeout = optuna_timeout
         self.best_params_path = best_params_path
         self.expected_context_hash = expected_context_hash
+        self.optuna_metric_space = _normalize_metric_space(optuna_metric_space)
+        self.target_transform_type = target_transform_type
+        self.columns_to_drop = list(columns_to_drop or [])
+        self.validation_size = float(validation_size or 0.0)
+        self.early_stopping_rounds = early_stopping_rounds
+        self.eval_metric = eval_metric
         self.loaded_best_params = False
         self.model: Optional[xgb.XGBRegressor] = None
         self.training_history = []
@@ -101,6 +162,14 @@ class ModelTrainer:
                 logger.info("Using loaded best parameters for training")
 
         logger.info(f"ModelTrainer initialized with use_optuna={use_optuna}")
+        logger.info(
+            "ModelTrainer metric setup: "
+            f"optuna_metric_space={self.optuna_metric_space}, "
+            f"target_transform_type={self.target_transform_type or 'none'}, "
+            f"validation_size={self.validation_size}, "
+            f"early_stopping_rounds={self.early_stopping_rounds}, "
+            f"eval_metric={self.eval_metric}"
+        )
         logger.debug(f"Initial parameters: {json.dumps(self.params, indent=2)}")
 
     @staticmethod
@@ -229,6 +298,194 @@ class ModelTrainer:
             "n_jobs": self.params.get("n_jobs", -1),
         }
 
+    def _fit_model(
+        self,
+        params: Dict[str, Any],
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        X_val: Optional[pd.DataFrame] = None,
+        y_val: Optional[pd.Series] = None,
+        early_stopping_rounds: Optional[int] = None,
+        eval_metric: Optional[str] = None,
+    ) -> xgb.XGBRegressor:
+        """
+        Fit one XGBoost model using the same validation/early-stopping path as final training.
+        """
+        model_params = params.copy()
+        fit_kwargs: Dict[str, Any] = {"verbose": False}
+        active_early_stopping_rounds = (
+            early_stopping_rounds
+            if early_stopping_rounds is not None
+            else self.early_stopping_rounds
+        )
+        active_eval_metric = eval_metric if eval_metric is not None else self.eval_metric
+
+        if X_val is not None and y_val is not None:
+            fit_kwargs["eval_set"] = [(X_val, y_val)]
+            if active_early_stopping_rounds is not None:
+                model_params["early_stopping_rounds"] = active_early_stopping_rounds
+        else:
+            model_params.pop("early_stopping_rounds", None)
+
+        if active_eval_metric is not None:
+            model_params["eval_metric"] = active_eval_metric
+        else:
+            model_params.pop("eval_metric", None)
+
+        model = xgb.XGBRegressor(**model_params)
+        model.fit(X_train, y_train, **fit_kwargs)
+        return model
+
+    def _split_train_validation(
+        self,
+        X_train_fold: pd.DataFrame,
+        y_train_fold: pd.Series,
+        fold_index: int,
+        stratify_labels: Optional[pd.Series] = None,
+    ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], pd.Series, Optional[pd.Series]]:
+        """
+        Split a fold into fit/validation subsets using the same strategy as final training.
+        """
+        if self.validation_size <= 0:
+            return X_train_fold, None, y_train_fold, None
+
+        split_kwargs: Dict[str, Any] = {
+            "test_size": self.validation_size,
+            "random_state": int(self.params.get("random_state", 42)) + int(fold_index),
+        }
+        if stratify_labels is not None and stratify_labels.nunique() > 1:
+            split_kwargs["stratify"] = stratify_labels
+
+        try:
+            split_result = cast(
+                Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+                train_test_split(
+                    X_train_fold,
+                    y_train_fold,
+                    **split_kwargs,
+                ),
+            )
+        except ValueError as exc:
+            logger.warning(
+                "Fold %s stratified validation split failed (%s); retrying without stratification",
+                fold_index + 1,
+                exc,
+            )
+            split_kwargs.pop("stratify", None)
+            split_result = cast(
+                Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+                train_test_split(
+                    X_train_fold,
+                    y_train_fold,
+                    **split_kwargs,
+                ),
+            )
+
+        return split_result
+
+    def _score_with_consistent_cv(
+        self,
+        params: Dict[str, Any],
+        X: pd.DataFrame,
+        y: pd.Series,
+        cv: CrossValidatorLike,
+        metric_space: Optional[str] = None,
+        target_transform_type: Optional[str] = None,
+        stratify_labels: Optional[pd.Series] = None,
+    ) -> Dict[str, Any]:
+        """
+        Run fold-by-fold evaluation using the same fold-internal validation path as final training.
+        """
+        if isinstance(cv, int) and not isinstance(cv, bool):
+            splitter = KFold(
+                n_splits=cv,
+                shuffle=True,
+                random_state=self.params.get("random_state", 42),
+            )
+        else:
+            splitter = cv
+
+        n_folds = splitter.get_n_splits(X, y, None)
+        scoring_space = _normalize_metric_space(metric_space or self.optuna_metric_space)
+        active_target_transform = (
+            target_transform_type
+            if target_transform_type is not None
+            else self.target_transform_type
+        )
+        cv_target = stratify_labels if stratify_labels is not None else y
+
+        fold_scores: List[float] = []
+        fold_details: List[Dict[str, Any]] = []
+        start_time = time.time()
+
+        for fold_index, (train_idx, test_idx) in enumerate(splitter.split(X, cv_target)):
+            X_train_fold_raw = X.iloc[train_idx].copy()
+            X_test_fold_raw = X.iloc[test_idx].copy()
+            y_train_fold = y.iloc[train_idx].copy()
+            y_test_fold = y.iloc[test_idx].copy()
+            fold_strata = (
+                stratify_labels.iloc[train_idx].copy()
+                if stratify_labels is not None
+                else None
+            )
+
+            X_fit_raw, X_val_raw, y_fit, y_val = self._split_train_validation(
+                X_train_fold_raw,
+                y_train_fold,
+                fold_index,
+                stratify_labels=fold_strata,
+            )
+
+            preprocessor = Preprocessor(columns_to_drop=self.columns_to_drop)
+            X_fit = preprocessor.fit_transform(X_fit_raw)
+            X_test = preprocessor.transform(X_test_fold_raw)
+            X_val = preprocessor.transform(X_val_raw) if X_val_raw is not None else None
+
+            fold_model = self._fit_model(
+                params=params,
+                X_train=X_fit,
+                y_train=y_fit,
+                X_val=X_val,
+                y_val=y_val,
+            )
+            y_pred = fold_model.predict(X_test)
+            fold_score = _negative_rmse_score(
+                y_true=y_test_fold,
+                y_pred=y_pred,
+                metric_space=scoring_space,
+                target_transform_type=active_target_transform,
+            )
+            fold_scores.append(float(fold_score))
+            fold_details.append(
+                {
+                    "fold": fold_index + 1,
+                    "score": float(fold_score),
+                    "rmse": float(-fold_score),
+                    "n_train_outer": int(len(train_idx)),
+                    "n_test_outer": int(len(test_idx)),
+                    "n_train_inner": int(len(X_fit)),
+                    "n_validation_inner": int(len(X_val)) if X_val is not None else 0,
+                    "best_iteration": getattr(fold_model, "best_iteration", None),
+                }
+            )
+
+        cv_time = time.time() - start_time
+        cv_scores = np.asarray(fold_scores, dtype=float)
+        return {
+            "cv_scores": cv_scores,
+            "mean_cv_score": float(np.mean(cv_scores)),
+            "std_cv_score": float(np.std(cv_scores)),
+            "max_cv_score": float(np.max(cv_scores)),
+            "min_cv_score": float(np.min(cv_scores)),
+            "cv_time": cv_time,
+            "n_folds": n_folds,
+            "fold_details": fold_details,
+            "metric_space": scoring_space,
+            "validation_size": self.validation_size,
+            "early_stopping_rounds": self.early_stopping_rounds,
+            "eval_metric": self.eval_metric,
+        }
+
     def train(
         self,
         X_train: pd.DataFrame,
@@ -275,22 +532,21 @@ class ModelTrainer:
                     "early_stopping_rounds provided without eval_set; early stopping will be ignored"
                 )
 
-            # Create model with current parameters
-            # Note: XGBoost >= 2.0 requires early_stopping_rounds and eval_metric in constructor, not fit()
-            model_params = self.params.copy()
-            if early_stopping_rounds is not None and eval_set_to_use:
-                model_params["early_stopping_rounds"] = early_stopping_rounds
-            if eval_metric is not None:
-                model_params["eval_metric"] = eval_metric
-            self.model = xgb.XGBRegressor(**model_params)
-
             # Train model
             start_time = time.time()
-            fit_kwargs: Dict[str, Any] = {"verbose": False}
-            if eval_set_to_use:
-                fit_kwargs = {"verbose": False, "eval_set": eval_set_to_use}
-
-            self.model.fit(X_train, y_train, **fit_kwargs)
+            if eval_set_to_use and y_val is None and X_val is None:
+                eval_X, eval_y = eval_set_to_use[0]
+            else:
+                eval_X, eval_y = X_val, y_val
+            self.model = self._fit_model(
+                params=self.params,
+                X_train=X_train,
+                y_train=y_train,
+                X_val=eval_X,
+                y_val=eval_y,
+                early_stopping_rounds=early_stopping_rounds,
+                eval_metric=eval_metric,
+            )
 
             training_time = time.time() - start_time
             logger.info(f"Model training completed in {training_time:.2f} seconds")
@@ -331,6 +587,9 @@ class ModelTrainer:
         y: pd.Series,
         cv: CrossValidatorLike = 5,
         scoring: str = "neg_root_mean_squared_error",
+        metric_space: Optional[str] = None,
+        target_transform_type: Optional[str] = None,
+        stratify_labels: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """
         Perform k-fold cross-validation.
@@ -340,54 +599,36 @@ class ModelTrainer:
             y: Target Series
             cv: Number of folds or cross-validator splitter
             scoring: Scoring metric (default: negative RMSE)
+            metric_space: RMSE scoring space ('transformed' or 'original')
+            target_transform_type: Target transform used before fitting
+            stratify_labels: Optional labels used for stratified outer/inner splits
 
         Returns:
             Dictionary with cross-validation results
         """
+        if scoring != "neg_root_mean_squared_error":
+            raise ValueError(
+                "Only neg_root_mean_squared_error is supported in the aligned CV path"
+            )
+
         n_folds = cv if isinstance(cv, int) and not isinstance(cv, bool) else cv.get_n_splits(X, y)
         logger.info(f"Starting {n_folds}-fold cross-validation")
-
-        # Create a fresh model for cross-validation WITHOUT early_stopping_rounds
-        # sklearn's cross_val_score doesn't pass eval_set, which XGBoost requires
-        # when early_stopping_rounds is set
-        cv_params = self.params.copy()
-        # Remove early stopping related parameters that require eval_set
-        cv_params.pop("early_stopping_rounds", None)
-        cv_params.pop("eval_metric", None)
-        cv_model = xgb.XGBRegressor(**cv_params)
-
-        # Define scoring function
-        if scoring == "neg_root_mean_squared_error":
-            scorer = make_scorer(
-                lambda y_true, y_pred: -np.sqrt(mean_squared_error(y_true, y_pred))
-            )
-        else:
-            scorer = scoring
-
-        # Perform cross-validation
-        # Use n_jobs=1 for GPU to avoid resource conflicts, n_jobs=-1 for CPU
-        cv_n_jobs = 1 if self.params.get("device") == "cuda" else -1
-        start_time = time.time()
-        cv_scores = cross_val_score(
-            cv_model, X, y, cv=cv, scoring=scorer, n_jobs=cv_n_jobs, verbose=0
+        results = self._score_with_consistent_cv(
+            params=self.params,
+            X=X,
+            y=y,
+            cv=cv,
+            metric_space=metric_space,
+            target_transform_type=target_transform_type,
+            stratify_labels=stratify_labels,
         )
-        cv_time = time.time() - start_time
+        scoring_space = results["metric_space"]
 
-        # Calculate metrics
-        results = {
-            "cv_scores": cv_scores,
-            "mean_cv_score": np.mean(cv_scores),
-            "std_cv_score": np.std(cv_scores),
-            "max_cv_score": np.max(cv_scores),
-            "min_cv_score": np.min(cv_scores),
-            "cv_time": cv_time,
-            "n_folds": n_folds,
-        }
-
-        logger.info(f"Cross-validation completed in {cv_time:.2f} seconds")
-        logger.info(f"CV scores: {cv_scores}")
+        logger.info(f"Cross-validation completed in {results['cv_time']:.2f} seconds")
+        logger.info(f"CV scores: {results['cv_scores']}")
         logger.info(
-            f"Mean CV score: {results['mean_cv_score']:.4f} (+/- {results['std_cv_score']:.4f})"
+            f"Mean CV score ({scoring_space} space): "
+            f"{results['mean_cv_score']:.4f} (+/- {results['std_cv_score']:.4f})"
         )
 
         return results
@@ -402,6 +643,7 @@ class ModelTrainer:
         storage_url: str = "sqlite:///logs/optuna_study.db",
         best_params_output_path: str = "logs/best_params.json",
         run_context: Optional[Dict[str, Any]] = None,
+        stratify_labels: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """
         Optimize hyperparameters using Optuna.
@@ -415,6 +657,7 @@ class ModelTrainer:
             storage_url: Optuna storage URL
             best_params_output_path: Output path for best parameters snapshot
             run_context: Optional context metadata (context_hash, data_file, etc.)
+            stratify_labels: Optional labels used for stratified outer/inner splits
 
         Returns:
             Dictionary with optimization results
@@ -440,6 +683,11 @@ class ModelTrainer:
         )
         logger.info(f"Optimization timeout: {self.optuna_timeout} seconds")
         logger.info(f"Optuna strategy version: {OPTUNA_SEARCH_SPACE_VERSION}")
+        logger.info(
+            "Optuna RMSE scoring space: "
+            f"{self.optuna_metric_space} "
+            f"(target_transform={self.target_transform_type or 'none'})"
+        )
 
         center_point = self.get_optuna_center_point()
         search_space = self.get_optuna_search_space()
@@ -466,37 +714,31 @@ class ModelTrainer:
 
         cpu_count = max(1, os.cpu_count() or 1)
         if self.params.get("device") == "cuda":
-            objective_cv_n_jobs = 1
             objective_model_n_jobs = 1
         else:
-            objective_cv_n_jobs = min(n_folds, cpu_count)
-            objective_model_n_jobs = max(1, cpu_count // objective_cv_n_jobs)
-
-        rmse_scorer = make_scorer(
-            lambda y_true, y_pred: -np.sqrt(mean_squared_error(y_true, y_pred))
-        )
+            objective_model_n_jobs = max(1, cpu_count // max(1, n_folds))
         logger.info(
             "Optuna CV execution: "
-            f"{n_folds} folds, cv_n_jobs={objective_cv_n_jobs}, "
-            f"model_n_jobs={objective_model_n_jobs}"
+            f"{n_folds} folds, model_n_jobs={objective_model_n_jobs}, "
+            f"validation_size={self.validation_size}, "
+            f"early_stopping_rounds={self.early_stopping_rounds}"
         )
 
         # Define objective function for Optuna
         def objective(trial: Trial) -> float:
             params = self.build_optuna_trial_params(trial)
             params["n_jobs"] = objective_model_n_jobs
-            cv_model = xgb.XGBRegressor(**params)
-            cv_scores = cross_val_score(
-                cv_model,
-                X,
-                y,
+            cv_results = self._score_with_consistent_cv(
+                params=params,
+                X=X,
+                y=y,
                 cv=cv_splitter,
-                scoring=rmse_scorer,
-                n_jobs=objective_cv_n_jobs,
-                verbose=0,
+                metric_space=self.optuna_metric_space,
+                target_transform_type=self.target_transform_type,
+                stratify_labels=stratify_labels,
             )
 
-            return float(-np.mean(cv_scores))
+            return float(-cv_results["mean_cv_score"])
 
         # Create Optuna study with persistent storage
         sampler = optuna.samplers.TPESampler(
@@ -528,7 +770,7 @@ class ModelTrainer:
         best_trial = study.best_trial
 
         logger.info(f"Optuna optimization completed in {opt_time:.2f} seconds")
-        logger.info(f"Best RMSE: {best_score:.4f}")
+        logger.info(f"Best RMSE ({self.optuna_metric_space} space): {best_score:.4f}")
         logger.info(f"Best parameters: {best_params}")
 
         # Save best parameters to file
@@ -552,6 +794,8 @@ class ModelTrainer:
         results = {
             "best_params": best_params,
             "best_score": best_score,
+            "metric_space": self.optuna_metric_space,
+            "target_transform_type": self.target_transform_type,
             "n_trials_before": n_trials_before,
             "n_trials_after": n_trials_after,
             "n_trials": n_trials_after,

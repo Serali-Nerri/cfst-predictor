@@ -1,4 +1,4 @@
-# CFST XGBoost Pipeline Configuration
+# Raw-space training + original-space tuning metric
 
 data:
   file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"

@@ -82,8 +82,7 @@ def plot_predictions_scatter(y_true: pd.Series, y_pred: np.ndarray,
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Scatter plot saved to {save_path}")
 
-        # Show plot
-        plt.show()
+        plt.close()
 
         logger.info("Scatter plot generation completed")
 
@@ -170,8 +169,7 @@ def plot_feature_importance(model: Any, feature_names: List[str],
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Feature importance plot saved to {save_path}")
 
-        # Show plot
-        plt.show()
+        plt.close()
 
         logger.info("Feature importance plot generation completed")
 
@@ -304,8 +302,7 @@ def plot_residuals(y_true: pd.Series, y_pred: np.ndarray,
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Residual plot saved to {save_path}")
 
-        # Show plot
-        plt.show()
+        plt.close()
 
         logger.info("Residual plot generation completed")
 
@@ -364,8 +361,7 @@ def plot_error_distribution(y_true: pd.Series, y_pred: np.ndarray,
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             logger.info(f"Error distribution plot saved to {save_path}")
 
-        # Show plot
-        plt.show()
+        plt.close()
 
         logger.info("Error distribution plot generation completed")
 

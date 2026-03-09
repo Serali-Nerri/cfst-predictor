@@ -1,0 +1,21 @@
+{
+  "trial_number": 131,
+  "best_rmse": 0.107084044825095,
+  "parameters": {
+    "max_depth": 6,
+    "learning_rate": 0.022527844233673835,
+    "n_estimators": 4446,
+    "subsample": 0.685757307008703,
+    "colsample_bytree": 0.4057553259956085,
+    "min_child_weight": 6,
+    "reg_alpha": 0.006149221737240257,
+    "reg_lambda": 0.04146496385611362,
+    "gamma": 0.0004141165953479343
+  },
+  "timestamp": "2026-03-09T21:48:50.003196",
+  "n_trials_total": 200,
+  "context_hash": "73a53bed2fc6",
+  "data_file": "/home/thelya/Work/work/xgboost/data/processed/2026.3.9-11864_feature_parameters_raw.csv",
+  "study_name": "xgboost_optimization__2026_3_9_11864_feature_parameters_raw__73a53bed2fc6__ab7c56c048",
+  "storage_url": "sqlite:///logs/optuna_study.db"
+}

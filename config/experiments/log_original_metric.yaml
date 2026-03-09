@@ -1,12 +1,12 @@
-# CFST XGBoost Pipeline Configuration
+# Log-space training + original-space tuning metric
 
 data:
   file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
 
   target_transform:
-    enabled: false
-    type: "none"
+    enabled: true
+    type: "log"
 
   columns_to_drop:
     - "b (mm)"
@@ -33,14 +33,14 @@ model:
   params:
     objective: "reg:squarederror"
     max_depth: 6
-    learning_rate: 0.0772553931443418
-    n_estimators: 2882
-    subsample: 0.730999760277189
-    colsample_bytree: 0.5359526434696961
-    min_child_weight: 13
-    reg_alpha: 0.6063786538652424
-    reg_lambda: 0.10815768560820926
-    gamma: 0.010383141061981991
+    learning_rate: 0.04411666122575092
+    n_estimators: 4066
+    subsample: 0.7038011848542036
+    colsample_bytree: 0.4714919226150699
+    min_child_weight: 6
+    reg_alpha: 0.033505711876129954
+    reg_lambda: 0.1408673338811182
+    gamma: 0.00020676219564729034
     random_state: 42
     tree_method: "hist"
     device: "cpu"
@@ -52,7 +52,7 @@ model:
   n_trials: 200
   optuna_timeout: 14400
   optuna_storage_url: "sqlite:///logs/optuna_study.db"
-  best_params_path: "logs/best_params_raw_stratified_original_200.json"
+  best_params_path: "logs/best_params_log_stratified_original_200.json"
 
   early_stopping_rounds: 100
   eval_metric: "rmse"
@@ -80,7 +80,7 @@ evaluation:
         bins: 4
 
 paths:
-  output_dir: "output/raw_original_stratified_200"
+  output_dir: "output/log_original_metric_stratified_200"
   model_dir: "models"
   model_output: "xgboost_model.pkl"
   preprocessor_output: "preprocessor.pkl"

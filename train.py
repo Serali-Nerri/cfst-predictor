@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import KFold, train_test_split
+from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from src.utils.logger import setup_logger
 from src.data_loader import DataLoader
@@ -34,6 +34,11 @@ from src.preprocessor import Preprocessor
 from src.model_trainer import ModelTrainer, OPTUNA_SEARCH_SPACE_VERSION
 from src.evaluator import Evaluator
 from src.utils.model_utils import save_model
+from src.splitting import (
+    build_regression_stratification_labels,
+    get_split_strategy,
+    required_stratum_count,
+)
 from src.visualizer import (
     create_evaluation_dashboard,
 )
@@ -88,6 +93,12 @@ def build_training_context(
     target_column: str,
     target_transform_type: Optional[str],
     columns_to_drop: List[str],
+    optuna_metric_space: str,
+    split_strategy: str,
+    split_config: Dict[str, Any],
+    validation_size: float,
+    early_stopping_rounds: Optional[int],
+    eval_metric: Optional[str],
 ) -> Dict[str, Any]:
     """
     Build deterministic training context for artifact compatibility checks.
@@ -99,6 +110,12 @@ def build_training_context(
         "target_column": target_column,
         "target_transform_type": target_transform_type or "none",
         "columns_to_drop": sorted(columns_to_drop),
+        "optuna_metric_space": optuna_metric_space,
+        "split_strategy": split_strategy,
+        "split_config": split_config,
+        "validation_size": validation_size,
+        "early_stopping_rounds": early_stopping_rounds,
+        "eval_metric": eval_metric,
     }
     context_json = json.dumps(
         context_payload, sort_keys=True, ensure_ascii=True
@@ -116,11 +133,24 @@ def build_study_name(data_file_path: str, context_hash: str) -> str:
 
 
 def build_optuna_tuning_fingerprint(
-    model_params: Dict[str, Any], cv_config: Dict[str, Any]
+    model_params: Dict[str, Any],
+    cv_config: Dict[str, Any],
+    optuna_metric_space: str,
+    split_strategy: str,
+    split_config: Dict[str, Any],
+    validation_size: float,
+    early_stopping_rounds: Optional[int],
+    eval_metric: Optional[str],
 ) -> str:
     """Build a deterministic fingerprint for the Optuna tuning strategy."""
     fingerprint_payload = {
         "search_space_version": OPTUNA_SEARCH_SPACE_VERSION,
+        "optuna_metric_space": optuna_metric_space,
+        "split_strategy": split_strategy,
+        "split_config": split_config,
+        "validation_size": validation_size,
+        "early_stopping_rounds": early_stopping_rounds,
+        "eval_metric": eval_metric,
         "model_params": model_params,
         "cv": {
             "n_splits": get_cv_n_splits(cv_config),
@@ -183,8 +213,41 @@ def get_cv_n_splits(cv_config: Dict[str, Any]) -> int:
     return n_splits
 
 
-def build_cv_splitter(cv_config: Dict[str, Any]) -> KFold:
-    """Build a KFold splitter from config.cv settings."""
+def format_target_space_description(
+    target_column: str, target_transform_type: Optional[str]
+) -> str:
+    """Describe the target space used by fitting and reporting."""
+    if target_transform_type == "log":
+        return f"ln({target_column}) -> exp() -> {target_column}"
+    if target_transform_type == "sqrt":
+        return f"sqrt({target_column}) -> square() -> {target_column}"
+    return target_column
+
+
+def format_training_space_label(target_transform_type: Optional[str]) -> str:
+    """Human-readable label for the model output space."""
+    if target_transform_type == "log":
+        return "ln space"
+    if target_transform_type == "sqrt":
+        return "sqrt space"
+    return "original space"
+
+
+def inverse_transform_predictions(
+    predictions: np.ndarray, target_transform_type: Optional[str]
+) -> np.ndarray:
+    """Map model outputs back to the original target space."""
+    if target_transform_type == "log":
+        return np.exp(predictions)
+    if target_transform_type == "sqrt":
+        return np.square(predictions)
+    return predictions
+
+
+def build_cv_splitter(
+    cv_config: Dict[str, Any], split_strategy: str
+) -> KFold:
+    """Build a CV splitter from config.cv settings."""
     n_splits = get_cv_n_splits(cv_config)
     shuffle = cv_config.get("shuffle", False)
     random_state = cv_config.get("random_state")
@@ -198,6 +261,13 @@ def build_cv_splitter(cv_config: Dict[str, Any]) -> KFold:
         raise ValueError("config.cv.random_state must be an integer or null")
 
     splitter_random_state = random_state if shuffle else None
+    if split_strategy == "regression_stratified":
+        return StratifiedKFold(
+            n_splits=n_splits,
+            shuffle=shuffle,
+            random_state=splitter_random_state,
+        )
+
     return KFold(
         n_splits=n_splits,
         shuffle=shuffle,
@@ -233,11 +303,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         data_config = cast(Dict[str, Any], config.get("data", {}))
         model_config = cast(Dict[str, Any], config.get("model", {}))
         cv_config = cast(Dict[str, Any], config.get("cv", {}))
+        evaluation_config = cast(Dict[str, Any], config.get("evaluation", {}))
         output_config = cast(Dict[str, Any], config.get("paths", {}))
 
         data_path = data_config.get("file_path")
         target_column = data_config.get("target_column", "K")
         columns_to_drop = data_config.get("columns_to_drop", [])
+        split_config = cast(Dict[str, Any], data_config.get("split", {}))
         if not data_path:
             raise ValueError("config.data.file_path is required")
 
@@ -263,6 +335,21 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         if target_transform_type:
             logger.info(f"Target transform enabled: {target_transform_type}")
 
+        optuna_metric_space = str(
+            model_config.get("optuna_metric_space", "transformed")
+        )
+        cv_metric_space = str(model_config.get("cv_metric_space", optuna_metric_space))
+        validation_size = float(model_config.get("validation_size", 0.1) or 0.0)
+        early_stopping_rounds = model_config.get("early_stopping_rounds")
+        eval_metric = model_config.get("eval_metric")
+        split_strategy = get_split_strategy(split_config)
+        regime_config = cast(
+            Dict[str, Any], evaluation_config.get("regime_analysis", {})
+        )
+        logger.info(f"Optuna RMSE metric space: {optuna_metric_space}")
+        logger.info(f"Cross-validation RMSE metric space: {cv_metric_space}")
+        logger.info(f"Data split strategy: {split_strategy}")
+
         # Validate XGBoost params early so study naming matches the real tuning config.
         xgb_params = build_xgb_params(model_config)
 
@@ -271,9 +358,24 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             target_column=target_column,
             target_transform_type=target_transform_type,
             columns_to_drop=columns_to_drop,
+            optuna_metric_space=optuna_metric_space,
+            split_strategy=split_strategy,
+            split_config=split_config,
+            validation_size=validation_size,
+            early_stopping_rounds=early_stopping_rounds,
+            eval_metric=eval_metric,
         )
         context_hash = training_context["context_hash"]
-        tuning_fingerprint = build_optuna_tuning_fingerprint(xgb_params, cv_config)
+        tuning_fingerprint = build_optuna_tuning_fingerprint(
+            xgb_params,
+            cv_config,
+            optuna_metric_space,
+            split_strategy,
+            split_config,
+            validation_size,
+            early_stopping_rounds,
+            eval_metric,
+        )
         study_name = build_versioned_study_name(
             data_path, context_hash, tuning_fingerprint
         )
@@ -303,44 +405,74 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info("\nStep 2.5: Splitting data into train/test sets...")
         test_size = data_config.get("test_size", 0.2)
         random_state = data_config.get("random_state", 42)
-
-        # Split transformed target (for model training)
-        train_test_split_result = cast(
-            Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
-            train_test_split(
-                features,
-                target_transformed,
-                test_size=test_size,
-                random_state=random_state,
-            ),
+        n_cv_splits = get_cv_n_splits(cv_config)
+        stratify_labels_full: Optional[pd.Series] = None
+        stratification_metadata: Dict[str, Any] = {"strategy": split_strategy}
+        minimum_stratum_size = required_stratum_count(
+            test_size=float(test_size),
+            validation_size=validation_size,
+            n_splits=n_cv_splits,
+            configured_minimum=cast(Optional[int], split_config.get("min_stratum_size")),
         )
-        X_train_full, X_test, y_train_trans_full, y_test_trans = train_test_split_result
-
-        # Also split original target values (for original space evaluation)
-        raw_split_result = cast(
-            Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
-            train_test_split(
-                features,
-                target_raw,
-                test_size=test_size,
-                random_state=random_state,
-            ),
-        )
-        _, _, y_train_orig_full, y_test_orig = raw_split_result
-
-        logger.info(
-            f"Training set: {len(X_train_full)} samples ({(1 - test_size) * 100:.0f}%)"
-        )
-        logger.info(f"Test set: {len(X_test)} samples ({test_size * 100:.0f}%)")
-
-        # Step 2.6: Split training data into train/validation sets for early stopping
-        validation_size = model_config.get("validation_size", 0.1)
-        X_val: Optional[pd.DataFrame] = None
-        y_val_trans: Optional[pd.Series] = None
-        if validation_size and validation_size > 0:
-            logger.info(
-                "\nStep 2.6: Splitting training data into train/validation sets..."
+        if split_strategy == "regression_stratified":
+            stratify_labels_candidate, stratification_metadata = (
+                build_regression_stratification_labels(
+                    features=features,
+                    target_raw=target_raw,
+                    split_config=split_config,
+                    minimum_count=minimum_stratum_size,
+                )
             )
+            if stratify_labels_candidate.nunique() > 1:
+                stratify_labels_full = stratify_labels_candidate
+                logger.info(
+                    "Regression stratification enabled: "
+                    f"{stratification_metadata['n_strata']} strata, "
+                    f"min_count={stratification_metadata['minimum_count_observed']}, "
+                    f"required>={stratification_metadata['minimum_count_required']}"
+                )
+            else:
+                logger.warning(
+                    "Regression stratification requested but only one stable stratum was produced; "
+                    "falling back to random split"
+                )
+
+        split_kwargs: Dict[str, Any] = {
+            "test_size": test_size,
+            "random_state": random_state,
+        }
+        if stratify_labels_full is not None:
+            split_kwargs["stratify"] = stratify_labels_full
+            split_result = cast(
+                Tuple[
+                    pd.DataFrame,
+                    pd.DataFrame,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                    pd.Series,
+                ],
+                train_test_split(
+                    features,
+                    target_transformed,
+                    target_raw,
+                    stratify_labels_full,
+                    **split_kwargs,
+                ),
+            )
+            (
+                X_train_full,
+                X_test,
+                y_train_trans_full,
+                y_test_trans,
+                y_train_orig_full,
+                y_test_orig,
+                train_strata_full,
+                test_strata,
+            ) = split_result
+        else:
             split_result = cast(
                 Tuple[
                     pd.DataFrame,
@@ -351,30 +483,123 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                     pd.Series,
                 ],
                 train_test_split(
-                    X_train_full,
-                    y_train_trans_full,
-                    y_train_orig_full,
-                    test_size=validation_size,
-                    random_state=random_state,
+                    features,
+                    target_transformed,
+                    target_raw,
+                    **split_kwargs,
                 ),
             )
-            X_train, X_val, y_train_trans, y_val_trans, _, _ = split_result
+            (
+                X_train_full,
+                X_test,
+                y_train_trans_full,
+                y_test_trans,
+                y_train_orig_full,
+                y_test_orig,
+            ) = split_result
+            train_strata_full = None
+            test_strata = None
+
+        effective_split_strategy = (
+            "regression_stratified" if train_strata_full is not None else "random"
+        )
+        if effective_split_strategy != split_strategy:
+            logger.warning(
+                "Effective split strategy downgraded to random because stable strata were unavailable"
+            )
+
+        logger.info(
+            f"Training set: {len(X_train_full)} samples ({(1 - test_size) * 100:.0f}%)"
+        )
+        logger.info(f"Test set: {len(X_test)} samples ({test_size * 100:.0f}%)")
+
+        # Step 2.6: Split training data into train/validation sets for early stopping
+        X_val_raw: Optional[pd.DataFrame] = None
+        y_val_trans: Optional[pd.Series] = None
+        if validation_size and validation_size > 0:
+            logger.info(
+                "\nStep 2.6: Splitting training data into train/validation sets..."
+            )
+            validation_split_kwargs: Dict[str, Any] = {
+                "test_size": validation_size,
+                "random_state": random_state,
+            }
+            if train_strata_full is not None:
+                validation_split_kwargs["stratify"] = train_strata_full
+                split_result = cast(
+                    Tuple[
+                        pd.DataFrame,
+                        pd.DataFrame,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                    ],
+                    train_test_split(
+                        X_train_full,
+                        y_train_trans_full,
+                        y_train_orig_full,
+                        train_strata_full,
+                        **validation_split_kwargs,
+                    ),
+                )
+                (
+                    X_train,
+                    X_val_raw,
+                    y_train_trans,
+                    y_val_trans,
+                    _,
+                    _,
+                    _,
+                    val_strata,
+                ) = split_result
+            else:
+                split_result = cast(
+                    Tuple[
+                        pd.DataFrame,
+                        pd.DataFrame,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                        pd.Series,
+                    ],
+                    train_test_split(
+                        X_train_full,
+                        y_train_trans_full,
+                        y_train_orig_full,
+                        **validation_split_kwargs,
+                    ),
+                )
+                (
+                    X_train,
+                    X_val_raw,
+                    y_train_trans,
+                    y_val_trans,
+                    _,
+                    _,
+                ) = split_result
+                val_strata = None
             logger.info(
                 f"Training subset: {len(X_train)} samples ({(1 - validation_size) * 100:.0f}%)"
             )
             logger.info(
-                f"Validation set: {len(X_val)} samples ({validation_size * 100:.0f}%)"
+                f"Validation set: {len(X_val_raw)} samples ({validation_size * 100:.0f}%)"
             )
         else:
             X_train = X_train_full
             y_train_trans = y_train_trans_full
+            val_strata = None
 
         # Step 3: Preprocess data (FIT ON TRAINING DATA ONLY - CRITICAL FIX)
         logger.info("\nStep 3: Preprocessing data...")
         preprocessor = Preprocessor(columns_to_drop=columns_to_drop)
         X_train_processed = preprocessor.fit_transform(X_train)
         X_test_processed = preprocessor.transform(X_test)
-        X_val_processed = preprocessor.transform(X_val) if X_val is not None else None
+        X_val_processed = (
+            preprocessor.transform(X_val_raw) if X_val_raw is not None else None
+        )
         logger.info(
             f"Preprocessing completed: {len(X_train_processed.columns)} features remaining"
         )
@@ -404,10 +629,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "optuna_storage_url", "sqlite:///logs/optuna_study.db"
         )
         best_params_path = model_config.get("best_params_path", "logs/best_params.json")
-        cv_splitter = build_cv_splitter(cv_config)
-
-        early_stopping_rounds = model_config.get("early_stopping_rounds")
-        eval_metric = model_config.get("eval_metric")
+        cv_splitter = build_cv_splitter(cv_config, effective_split_strategy)
 
         trainer = ModelTrainer(
             params=xgb_params,
@@ -416,6 +638,12 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             optuna_timeout=optuna_timeout,
             best_params_path=best_params_path,
             expected_context_hash=context_hash,
+            optuna_metric_space=optuna_metric_space,
+            target_transform_type=target_transform_type,
+            columns_to_drop=columns_to_drop,
+            validation_size=validation_size,
+            early_stopping_rounds=early_stopping_rounds,
+            eval_metric=eval_metric,
         )
 
         eval_set = (
@@ -432,13 +660,14 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         if use_optuna:
             logger.info("Starting Optuna hyperparameter optimization...")
             opt_results = trainer.optimize_hyperparameters(
-                X_train_processed,
-                y_train_trans,  # Training data only
+                X_train_full,
+                y_train_trans_full,
                 cv=cv_splitter,
                 study_name=study_name,
                 storage_url=optuna_storage_url,
                 best_params_output_path=best_params_path,
                 run_context=training_context,
+                stratify_labels=train_strata_full,
             )
             logger.info(
                 "Optuna optimization completed: "
@@ -451,6 +680,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 "n_trials_before": opt_results["n_trials_before"],
                 "n_trials_after": opt_results["n_trials_after"],
                 "best_score": opt_results["best_score"],
+                "metric_space": opt_results["metric_space"],
+                "target_transform_type": opt_results["target_transform_type"],
                 "best_params": opt_results["best_params"],
             }
 
@@ -461,17 +692,25 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             early_stopping_rounds=early_stopping_rounds,
             eval_metric=eval_metric,
         )
-        logger.info(f"Final model training completed on ln({target_column}) target")
+        logger.info(
+            "Final model training completed on target space: "
+            f"{format_target_space_description(target_column, target_transform_type)}"
+        )
 
         # Step 5: Cross-validation on training data only
         logger.info("\nStep 5: Performing cross-validation on training data...")
         cv_results = trainer.cross_validate(
-            X_train_processed,
-            y_train_trans,  # Training data only
+            X_train_full,
+            y_train_trans_full,
             cv=cv_splitter,
+            metric_space=cv_metric_space,
+            target_transform_type=target_transform_type,
+            stratify_labels=train_strata_full,
         )
         logger.info(
-            f"Cross-validation RMSE: {cv_results['mean_cv_score']:.4f} (+/- {cv_results['std_cv_score']:.4f})"
+            "Cross-validation RMSE "
+            f"({cv_metric_space} space): {cv_results['mean_cv_score']:.4f} "
+            f"(+/- {cv_results['std_cv_score']:.4f})"
         )
 
         # Step 6: Evaluate model on BOTH training and test sets
@@ -486,13 +725,18 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         y_test_pred_trans = predictor.predict(X_test)
 
         # Apply inverse transform to get back to original space
+        y_train_pred_orig = inverse_transform_predictions(
+            y_train_pred_trans, target_transform_type
+        )
+        y_test_pred_orig = inverse_transform_predictions(
+            y_test_pred_trans, target_transform_type
+        )
         if target_transform_type == "log":
-            y_train_pred_orig = np.exp(y_train_pred_trans)
-            y_test_pred_orig = np.exp(y_test_pred_trans)
             logger.info("Applied exp() inverse transform to predictions")
+        elif target_transform_type == "sqrt":
+            logger.info("Applied square() inverse transform to predictions")
         else:
-            y_train_pred_orig = y_train_pred_trans
-            y_test_pred_orig = y_test_pred_trans
+            logger.info("Predictions already in original target space")
 
         # Calculate metrics in ORIGINAL space (recommended - true application scenario)
         train_metrics = evaluator.calculate_metrics(
@@ -506,6 +750,18 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         test_metrics_trans = evaluator.calculate_metrics(
             y_test_trans, y_test_pred_trans
+        )
+        train_regime_metrics = evaluator.calculate_regime_metrics(
+            y_true=y_train_orig_full,
+            y_pred=y_train_pred_orig,
+            features=X_train_full,
+            regime_config=regime_config,
+        )
+        test_regime_metrics = evaluator.calculate_regime_metrics(
+            y_true=y_test_orig,
+            y_pred=y_test_pred_orig,
+            features=X_test,
+            regime_config=regime_config,
         )
 
         # Log original space metrics (PRIMARY)
@@ -526,13 +782,29 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             logger.info(f"  MAPE: {test_metrics['mape']:.2f}%")
         if test_metrics.get("cov"):
             logger.info(f"  COV: {test_metrics['cov']:.4f}")
+        if test_regime_metrics:
+            logger.info("Test regime summary:")
+            for regime_name, regime_result in test_regime_metrics.items():
+                worst_group = regime_result.get("worst_rmse_group")
+                if worst_group:
+                    logger.info(
+                        f"  {regime_name}: worst={worst_group['label']} "
+                        f"(RMSE={worst_group['metrics']['rmse']:.4f} kN, "
+                        f"n={worst_group['n_samples']})"
+                    )
 
         # Log transformed space metrics (REFERENCE)
-        logger.info(f"\n--- Transformed Space Metrics (Reference) ---")
-        logger.info(f"Training RMSE (ln space): {train_metrics_trans['rmse']:.4f}")
-        logger.info(f"Test RMSE (ln space): {test_metrics_trans['rmse']:.4f}")
+        training_space_label = format_training_space_label(target_transform_type)
+        logger.info(f"\n--- Training Space Metrics (Reference) ---")
         logger.info(
-            f"Train/Test ratio (ln space): {test_metrics_trans['rmse'] / train_metrics_trans['rmse']:.2f}"
+            f"Training RMSE ({training_space_label}): {train_metrics_trans['rmse']:.4f}"
+        )
+        logger.info(
+            f"Test RMSE ({training_space_label}): {test_metrics_trans['rmse']:.4f}"
+        )
+        logger.info(
+            f"Train/Test ratio ({training_space_label}): "
+            f"{test_metrics_trans['rmse'] / train_metrics_trans['rmse']:.2f}"
         )
 
         # Check for overfitting (using original space metrics)
@@ -591,15 +863,22 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "params_source": params_source,
             "final_model_params": trainer.params.copy(),
             "optuna_run_info": optuna_run_info,
+            "optuna_metric_space": optuna_metric_space,
+            "cv_metric_space": cv_metric_space,
             "target_transform": {
                 "enabled": target_transform_type is not None,
                 "type": target_transform_type,
                 "original_column": target_column,
             },
+            "split_strategy_requested": split_strategy,
+            "split_strategy_effective": effective_split_strategy,
+            "stratification_metadata": stratification_metadata,
             "train_metrics_original_space": train_metrics,  # PRIMARY
             "test_metrics_original_space": test_metrics,  # PRIMARY
             "train_metrics_transformed_space": train_metrics_trans,  # REFERENCE
             "test_metrics_transformed_space": test_metrics_trans,  # REFERENCE
+            "train_regime_metrics_original_space": train_regime_metrics,
+            "test_regime_metrics_original_space": test_regime_metrics,
             "cross_validation_results": cv_results,
             "feature_names": feature_names,
             "n_train_samples": len(X_train_full),
@@ -607,7 +886,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "n_features": len(feature_names),
             "test_size": test_size,
             "n_train_fit_samples": len(X_train),
-            "n_validation_samples": len(X_val) if X_val is not None else 0,
+            "n_validation_samples": len(X_val_raw) if X_val_raw is not None else 0,
             "training_successful": True,
             "overfitting_check": {
                 "rmse_ratio_original": test_metrics["rmse"] / train_metrics["rmse"],
@@ -651,22 +930,35 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 "params_source": params_source,
                 "final_model_params": trainer.params.copy(),
                 "optuna_run_info": optuna_run_info,
+                "optuna_metric_space": optuna_metric_space,
+                "cv_metric_space": cv_metric_space,
                 "target_transform": {
                     "enabled": target_transform_type is not None,
                     "type": target_transform_type,
                     "original_column": target_column,
                 },
+                "split_strategy_requested": split_strategy,
+                "split_strategy_effective": effective_split_strategy,
+                "stratification_metadata": stratification_metadata,
                 "train_metrics_original_space": train_metrics,  # PRIMARY
                 "test_metrics_original_space": test_metrics,  # PRIMARY
                 "train_metrics_transformed_space": train_metrics_trans,  # REFERENCE
                 "test_metrics_transformed_space": test_metrics_trans,  # REFERENCE
+                "train_regime_metrics_original_space": train_regime_metrics,
+                "test_regime_metrics_original_space": test_regime_metrics,
                 "cv_results": serializable_cv_results,
                 "data_split": {
                     "n_train": len(X_train_full),
                     "n_test": len(X_test),
                     "test_size": test_size,
                     "n_train_fit": len(X_train),
-                    "n_validation": len(X_val) if X_val is not None else 0,
+                    "n_validation": len(X_val_raw) if X_val_raw is not None else 0,
+                    "n_strata_train": int(train_strata_full.nunique())
+                    if train_strata_full is not None
+                    else None,
+                    "n_strata_test": int(test_strata.nunique())
+                    if test_strata is not None
+                    else None,
                 },
                 "overfitting_analysis": {
                     "rmse_ratio_original": test_metrics["rmse"] / train_metrics["rmse"],
@@ -693,7 +985,9 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info("\n" + "=" * 80)
         logger.info("PERFORMANCE SUMMARY")
         logger.info("=" * 80)
-        logger.info(f"Target: ln({target_column}) → exp() → {target_column}")
+        logger.info(
+            f"Target: {format_target_space_description(target_column, target_transform_type)}"
+        )
         logger.info(f"")
         logger.info(f"Original Space (Primary):")
         logger.info(
@@ -702,16 +996,31 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(
             f"  Test:     RMSE={test_metrics['rmse']:.4f} kN, R²={test_metrics['r2']:.4f}, COV={test_metrics.get('cov', 'N/A')}"
         )
-        logger.info(f"  CV:       RMSE={-cv_results['mean_cv_score']:.4f}")
+        logger.info(
+            f"  CV ({cv_metric_space}): RMSE={-cv_results['mean_cv_score']:.4f}"
+        )
         logger.info(f"")
-        logger.info(f"Transformed Space (Reference):")
-        logger.info(f"  Training RMSE (ln): {train_metrics_trans['rmse']:.4f}")
-        logger.info(f"  Test RMSE (ln):     {test_metrics_trans['rmse']:.4f}")
+        logger.info(f"Training Space (Reference):")
+        logger.info(
+            f"  Training RMSE ({training_space_label}): {train_metrics_trans['rmse']:.4f}"
+        )
+        logger.info(
+            f"  Test RMSE ({training_space_label}):     {test_metrics_trans['rmse']:.4f}"
+        )
         logger.info(f"")
         logger.info(f"Overfitting Analysis:")
         rmse_ratio_final = test_metrics["rmse"] / train_metrics["rmse"]
         status = "OVERFIT" if rmse_ratio_final > 1.2 else "OK"
         logger.info(f"  Ratio: {rmse_ratio_final:.2f} ({status})")
+        if test_regime_metrics:
+            logger.info("Regime Worst Cases:")
+            for regime_name, regime_result in test_regime_metrics.items():
+                worst_group = regime_result.get("worst_rmse_group")
+                if worst_group:
+                    logger.info(
+                        f"  {regime_name}: {worst_group['label']} "
+                        f"(RMSE={worst_group['metrics']['rmse']:.4f} kN)"
+                    )
         logger.info("=" * 80)
 
         return {
@@ -724,6 +1033,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "test_metrics": test_metrics,
             "train_metrics_trans": train_metrics_trans,
             "test_metrics_trans": test_metrics_trans,
+            "train_regime_metrics": train_regime_metrics,
+            "test_regime_metrics": test_regime_metrics,
             "target_transform_type": target_transform_type,
             "cv_results": cv_results,
             "feature_names": feature_names,

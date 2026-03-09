@@ -12,6 +12,7 @@ from pathlib import Path
 import json
 
 from src.utils.logger import get_logger
+from src.splitting import build_regime_labels
 
 logger = get_logger(__name__)
 
@@ -152,6 +153,112 @@ class Evaluator:
             error_msg = f"Failed to calculate metrics: {str(e)}"
             logger.error(error_msg)
             raise Exception(error_msg)
+
+    def calculate_regime_metrics(
+        self,
+        y_true: pd.Series,
+        y_pred: np.ndarray,
+        features: Optional[pd.DataFrame],
+        regime_config: Optional[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Calculate metrics for configured target/feature regimes.
+        """
+        if not regime_config or not regime_config.get("enabled", False):
+            return {}
+
+        regimes = regime_config.get("regimes", [])
+        if not isinstance(regimes, list):
+            raise ValueError("evaluation.regime_analysis.regimes must be a list")
+
+        y_true_series = pd.Series(np.asarray(y_true).reshape(-1), index=y_true.index)
+        y_pred_array = np.asarray(y_pred).reshape(-1)
+        if len(y_true_series) != len(y_pred_array):
+            raise ValueError("y_true and y_pred must have the same length for regime metrics")
+
+        results: Dict[str, Any] = {}
+        for regime_spec in regimes:
+            if not isinstance(regime_spec, dict):
+                raise ValueError("Each regime definition must be a mapping")
+            regime_name = str(regime_spec.get("name", "")).strip()
+            source = str(regime_spec.get("source", "target")).strip().lower()
+            bins = regime_spec.get("bins", 4)
+
+            if not regime_name:
+                raise ValueError("Each regime definition requires a non-empty name")
+            if isinstance(bins, bool) or not isinstance(bins, int) or bins < 2:
+                raise ValueError(f"Invalid bins for regime '{regime_name}': {bins}")
+
+            if source == "target":
+                regime_values = y_true_series
+            elif source == "feature":
+                column = regime_spec.get("column")
+                if features is None:
+                    logger.warning(
+                        "Skipping regime '%s' because feature data is not available",
+                        regime_name,
+                    )
+                    continue
+                if column not in features.columns:
+                    logger.warning(
+                        "Skipping regime '%s' because feature column '%s' is missing",
+                        regime_name,
+                        column,
+                    )
+                    continue
+                regime_values = features[column]
+            else:
+                raise ValueError(
+                    f"Unsupported regime source '{source}' for regime '{regime_name}'"
+                )
+
+            labels, ranges = build_regime_labels(regime_values, int(bins), regime_name)
+            grouped_results = []
+            for label in sorted(labels.dropna().unique()):
+                mask = labels == label
+                sample_count = int(mask.sum())
+                if sample_count < 2:
+                    logger.warning(
+                        "Skipping regime '%s' bucket '%s' because it has fewer than 2 samples",
+                        regime_name,
+                        label,
+                    )
+                    continue
+                grouped_results.append(
+                    {
+                        "label": label,
+                        "n_samples": sample_count,
+                        "metrics": self.calculate_metrics(
+                            y_true_series[mask],
+                            y_pred_array[mask.to_numpy()],
+                        ),
+                    }
+                )
+
+            if grouped_results:
+                worst_bucket = max(
+                    grouped_results,
+                    key=lambda item: item["metrics"]["rmse"],
+                )
+                best_bucket = min(
+                    grouped_results,
+                    key=lambda item: item["metrics"]["rmse"],
+                )
+            else:
+                worst_bucket = None
+                best_bucket = None
+
+            results[regime_name] = {
+                "source": source,
+                "column": regime_spec.get("column"),
+                "bins_requested": int(bins),
+                "ranges": ranges,
+                "groups": grouped_results,
+                "worst_rmse_group": worst_bucket,
+                "best_rmse_group": best_bucket,
+            }
+
+        return results
 
     def evaluate_model(self, model: Any, X: pd.DataFrame, y: pd.Series,
                       model_name: str = "model") -> Dict[str, Any]:

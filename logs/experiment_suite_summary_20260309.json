@@ -1,0 +1,92 @@
+[
+  {
+    "config_path": "config/experiments/raw_original_metric.yaml",
+    "output_dir": "output/raw_original_stratified_200",
+    "split_strategy_effective": "regression_stratified",
+    "optuna_metric_space": "original",
+    "cv_metric_space": "original",
+    "target_transform": {
+      "enabled": false,
+      "type": null,
+      "original_column": "Nexp (kN)"
+    },
+    "best_score": 463.3385467694038,
+    "best_params": {
+      "max_depth": 8,
+      "learning_rate": 0.09677400495600313,
+      "n_estimators": 4140,
+      "subsample": 0.7684525558606209,
+      "colsample_bytree": 0.5606350209585462,
+      "min_child_weight": 9,
+      "reg_alpha": 0.13992884673067663,
+      "reg_lambda": 0.010168768975550593,
+      "gamma": 0.16266536439700222
+    },
+    "test_rmse": 261.436566109347,
+    "test_mae": 118.76947924268185,
+    "test_r2": 0.9870196578476782,
+    "test_cov": 0.12017998754981121,
+    "cv_rmse": 463.3385467694038,
+    "cv_rmse_std": 135.26241280218906
+  },
+  {
+    "config_path": "config/experiments/log_transformed_metric.yaml",
+    "output_dir": "output/log_transformed_metric_stratified_200",
+    "split_strategy_effective": "regression_stratified",
+    "optuna_metric_space": "transformed",
+    "cv_metric_space": "transformed",
+    "target_transform": {
+      "enabled": true,
+      "type": "log",
+      "original_column": "Nexp (kN)"
+    },
+    "best_score": 0.107084044825095,
+    "best_params": {
+      "max_depth": 6,
+      "learning_rate": 0.022527844233673835,
+      "n_estimators": 4446,
+      "subsample": 0.685757307008703,
+      "colsample_bytree": 0.4057553259956085,
+      "min_child_weight": 6,
+      "reg_alpha": 0.006149221737240257,
+      "reg_lambda": 0.04146496385611362,
+      "gamma": 0.0004141165953479343
+    },
+    "test_rmse": 276.88787594628184,
+    "test_mae": 115.56083180064414,
+    "test_r2": 0.9854400005454947,
+    "test_cov": 0.08741908336389143,
+    "cv_rmse": 0.107084044825095,
+    "cv_rmse_std": 0.0024823257488850088
+  },
+  {
+    "config_path": "config/experiments/log_original_metric.yaml",
+    "output_dir": "output/log_original_metric_stratified_200",
+    "split_strategy_effective": "regression_stratified",
+    "optuna_metric_space": "original",
+    "cv_metric_space": "original",
+    "target_transform": {
+      "enabled": true,
+      "type": "log",
+      "original_column": "Nexp (kN)"
+    },
+    "best_score": 435.46507087756316,
+    "best_params": {
+      "max_depth": 5,
+      "learning_rate": 0.032557704737487175,
+      "n_estimators": 4468,
+      "subsample": 0.6545203978840765,
+      "colsample_bytree": 0.5512277011503678,
+      "min_child_weight": 5,
+      "reg_alpha": 0.013217150723741274,
+      "reg_lambda": 0.031029678277946865,
+      "gamma": 0.000179818445655093
+    },
+    "test_rmse": 262.4605434944466,
+    "test_mae": 113.02401840608799,
+    "test_r2": 0.9869177776340888,
+    "test_cov": 0.08718136524491484,
+    "cv_rmse": 435.46507087756316,
+    "cv_rmse_std": 144.81220501871465
+  }
+]
