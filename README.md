@@ -16,15 +16,24 @@
 - 输出训练/测试指标、交叉验证结果、可比较的 `regime_analysis`、图表与模型产物
 - 从已保存模型目录加载模型并进行 CSV 批量预测
 
+当前默认主线已经切换为：
+
+- `target_mode: psi_over_npl`
+- `target_transform.type: log`
+- `model.n_trials: 200`
+- 默认输出目录：`output/psi_over_npl_log_original_200`
+
 ## 当前实现的核心特性
 
 - **模块化结构**：`src/` 下按数据加载、预处理、训练、评估、预测、可视化拆分
 - **严格参数入口**：XGBoost 参数仅允许从 `config.model.params` 读取
-- **上下文隔离的最优参数复用**：通过 `context_hash` 约束 `best_params.json` 的复用范围
+- **上下文隔离的最优参数复用**：通过 `context_hash` 约束 `logs/best_params_*.json` 的复用范围
 - **目标空间分离**：训练可在 `psi` / `log(psi)` 空间进行，最终统一回到 `Nexp` 空间报告
 - **多指标评估**：当前实现 `RMSE`、`MAE`、`R²`、`MAPE`、`COV`
 - **可比较的 regime analysis**：先在训练集拟合 regime schema，再对 train/test 共用同一套区间
 - **训练产物保存**：保存模型、预处理器、特征名、训练元数据与评估报告
+
+当前默认主线与 `raw psi` 对照的完整结果见：`doc/raw_psi_vs_log_psi_full_run_20260311.md`。
 
 ## 环境要求
 
@@ -54,19 +63,26 @@ pip install -r requirements.txt
 ## 项目结构
 
 ```text
-xgboost-CFST/
+xgboost/
 ├── config/
-│   └── config.yaml
+│   ├── config.yaml
+│   └── experiments/
 ├── data/
-│   └── raw/
+│   ├── raw/
+│   └── processed/
+├── doc/
 ├── logs/
 ├── output/
+├── plan/
+├── scripts/
 ├── src/
 │   ├── data_loader.py
-│   ├── preprocessor.py
-│   ├── model_trainer.py
+│   ├── domain_features.py
 │   ├── evaluator.py
+│   ├── model_trainer.py
 │   ├── predictor.py
+│   ├── preprocessor.py
+│   ├── splitting.py
 │   ├── visualizer.py
 │   └── utils/
 ├── tests/
@@ -97,6 +113,13 @@ xgboost-CFST/
 python train.py --config config/config.yaml
 ```
 
+以上命令会直接运行当前默认主线：
+
+- `target_mode: psi_over_npl`
+- `target_transform.type: log`
+- `n_trials: 200`
+- 默认输出目录：`output/psi_over_npl_log_original_200`
+
 指定输出目录：
 
 ```bash
@@ -114,7 +137,7 @@ CFST 字段释义与历史特征筛选说明请参见：`doc/CFST字段与特征
 
 ```yaml
 data:
-  file_path: "data/raw/feature_parameters_unique.csv"
+  file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
   target_mode: "psi_over_npl"
   target_transform:
@@ -126,7 +149,7 @@ data:
     - "r0 (mm)"
     - "t (mm)"
     - "L (mm)"
-    - "Npl (kN)"
+    - "lambda"
   test_size: 0.2
   random_state: 42
 
@@ -134,22 +157,22 @@ model:
   params:
     objective: "reg:squarederror"
     max_depth: 5
-    learning_rate: 0.05
-    n_estimators: 1200
-    min_child_weight: 10
-    subsample: 0.8
-    colsample_bytree: 0.75
-    reg_alpha: 0.5
-    reg_lambda: 2.0
-    gamma: 0.05
+    learning_rate: 0.0451669400461485
+    n_estimators: 3970
+    min_child_weight: 4
+    subsample: 0.7238136617365515
+    colsample_bytree: 0.4212006920305448
+    reg_alpha: 0.012529841627285286
+    reg_lambda: 0.44957639473634237
+    gamma: 0.00013613870646182803
     random_state: 42
     tree_method: "hist"
     device: "cpu"
     n_jobs: -1
   use_optuna: true
-  n_trials: 400
+  n_trials: 200
   optuna_timeout: 14400
-  best_params_path: "logs/best_params.json"
+  best_params_path: "logs/best_params_psi_over_npl_log_original_200.json"
   early_stopping_rounds: 100
   eval_metric: "rmse"
   validation_size: 0.15
@@ -176,21 +199,22 @@ cv:
 - `cv.n_splits` 控制折数，`cv.shuffle` 控制是否打乱样本，`cv.random_state` 在 `shuffle: true` 时控制折分复现性。
 - `target_mode: psi_over_npl` 表示模型学习 `psi = Nexp / Npl`，但最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 当前作用于训练目标，而不是直接作用于报告目标。
+- 当前默认主线就是 `target_mode: psi_over_npl + target_transform.type: log`。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
-- 当 `use_optuna: false` 时，如果 `logs/best_params.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
+- 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 `logs/best_params_*.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
 
 ## 训练输出
 
-如果运行：
+如果直接运行默认主线：
 
 ```bash
-python train.py --config config/config.yaml --output output/xgboost_model
+python train.py --config config/config.yaml
 ```
 
-则当前代码会在 `output/xgboost_model/` 下生成类似产物：
+则当前代码会在 `output/psi_over_npl_log_original_200/` 下生成类似产物：
 
 ```text
-output/xgboost_model/
+output/psi_over_npl_log_original_200/
 ├── xgboost_model.pkl
 ├── preprocessor.pkl
 ├── feature_names.json
@@ -210,6 +234,8 @@ output/xgboost_model/
     ├── xgboost_model_test_feature_ranking.csv
     └── xgboost_model_test_feature_ranking.txt
 ```
+
+如果显式传入 `--output output/xgboost_model`，则会改写到你指定的目录。
 
 ## 评估指标解释
 
@@ -240,7 +266,7 @@ output/xgboost_model/
 ### 批量预测
 
 ```bash
-python predict.py --model output/xgboost_model --input data/raw/all.csv --output output/predictions.csv
+python predict.py --model output/psi_over_npl_log_original_200 --input data/raw/all.csv --output output/predictions.csv
 ```
 
 参数说明：
@@ -256,7 +282,7 @@ python predict.py --model output/xgboost_model --input data/raw/all.csv --output
 当前实现不是交互式输入，而是：
 
 ```bash
-python predict.py --model output/xgboost_model --input data/raw/one_row.csv --single
+python predict.py --model output/psi_over_npl_log_original_200 --input data/raw/one_row.csv --single
 ```
 
 在 `--single` 模式下：
@@ -284,7 +310,7 @@ fc (MPa),fy (MPa),Ac (mm^2),...,prediction
 当前项目支持：
 
 - 将 Optuna study 持久化到 SQLite
-- 将最优参数保存到 `logs/best_params.json`
+- 将最优参数保存到 `best_params_path` 指向的 JSON 文件
 - 在上下文哈希匹配时自动复用最优参数
 
 典型流程：
@@ -296,7 +322,7 @@ python train.py --config config/config.yaml
 当 `use_optuna: true` 时，会：
 
 1. 在训练数据上进行调参
-2. 将最优参数保存到 `logs/best_params.json`
+2. 将最优参数保存到 `logs/best_params_psi_over_npl_log_original_200.json`
 3. 在同一轮训练中使用最优参数重训最终模型
 
 ## 已知限制
