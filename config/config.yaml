@@ -45,7 +45,7 @@ model:
     device: "cpu"
     n_jobs: -1
 
-  use_optuna: true
+  use_optuna: false
   optuna_metric_space: "original"
   cv_metric_space: "original"
   n_trials: 200
