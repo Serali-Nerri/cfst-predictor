@@ -49,6 +49,8 @@ def _quantile_codes(series: pd.Series, n_bins: int) -> Tuple[pd.Series, int]:
     to rank-based qcut while still preserving the requested ordering.
     """
     series_no_na = cast(pd.Series, series.astype(float))
+    if (~np.isfinite(series_no_na)).any():
+        raise ValueError("Stratification values must be finite")
     unique_count = int(series_no_na.nunique(dropna=True))
     effective_bins = min(max(2, int(n_bins)), unique_count)
     if effective_bins < 2:

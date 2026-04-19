@@ -29,9 +29,11 @@ import numpy as np
 from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from src.domain_features import (
+    NPL_COLUMN,
+    TARGET_MODE_PSI_OVER_NPL,
+    apply_target_transform,
     get_training_target_name,
     normalize_target_mode,
-    restore_report_target,
 )
 from src.utils.logger import setup_logger
 from src.data_loader import DataLoader
@@ -467,6 +469,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             f"Data loaded: {len(features)} samples, {len(features.columns)} features"
         )
 
+        target_metadata = build_target_metadata(
+            report_target_column=target_column,
+            target_mode=target_mode,
+            target_transform_type=target_transform_type,
+            derived_columns=data_loader.derived_columns,
+        )
+
         # Step 2.5: Split data into train/test sets (FIXES DATA LEAKAGE)
         logger.info("\nStep 2.5: Splitting data into train/test sets...")
         test_size = data_config.get("test_size", 0.2)
@@ -725,24 +734,26 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         # Make predictions on BOTH sets (in transformed space)
         from src.predictor import Predictor
 
-        predictor = Predictor(model, preprocessor, feature_names)
-        y_train_pred_trans = predictor.predict(X_train_full)
-        y_test_pred_trans = predictor.predict(X_test)
-
-        # Apply inverse transform + target-mode restoration to get back to report space
-        y_train_pred_orig = restore_report_target(
-            y_train_pred_trans,
-            target_mode=target_mode,
-            target_transform_type=target_transform_type,
-            reference_features=X_train_full,
-        )
-        y_test_pred_orig = restore_report_target(
-            y_test_pred_trans,
-            target_mode=target_mode,
-            target_transform_type=target_transform_type,
-            reference_features=X_test,
-        )
+        predictor = Predictor(model, preprocessor, feature_names, metadata=target_metadata)
+        y_train_pred_orig = predictor.predict(X_train_full)
+        y_test_pred_orig = predictor.predict(X_test)
         logger.info("Mapped model outputs back to reported target space")
+
+        if target_mode == TARGET_MODE_PSI_OVER_NPL:
+            y_train_pred_model_raw = y_train_pred_orig / X_train_full[NPL_COLUMN].to_numpy(dtype=float)
+            y_test_pred_model_raw = y_test_pred_orig / X_test[NPL_COLUMN].to_numpy(dtype=float)
+        else:
+            y_train_pred_model_raw = y_train_pred_orig
+            y_test_pred_model_raw = y_test_pred_orig
+
+        y_train_pred_trans = apply_target_transform(
+            y_train_pred_model_raw,
+            target_transform_type,
+        )
+        y_test_pred_trans = apply_target_transform(
+            y_test_pred_model_raw,
+            target_transform_type,
+        )
 
         # Calculate metrics in ORIGINAL space (recommended - true application scenario)
         train_metrics = evaluator.calculate_metrics(
@@ -864,12 +875,6 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
 
         # Step 8: Save model and artifacts
         logger.info("\nStep 8: Saving model and artifacts...")
-        target_metadata = build_target_metadata(
-            report_target_column=target_column,
-            target_mode=target_mode,
-            target_transform_type=target_transform_type,
-            derived_columns=data_loader.derived_columns,
-        )
 
         # Save model with metadata
         metadata = {

@@ -5,14 +5,14 @@ This module handles loading data from CSV files and preparing it for ML processi
 """
 
 import pandas as pd
-import numpy as np
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, cast
 from pathlib import Path
 
 from src.domain_features import (
+    NPL_COLUMN,
+    PSI_COLUMN,
     apply_target_transform,
     compute_training_target,
-    ensure_target_mode_columns,
     get_training_target_name,
     normalize_target_mode,
 )
@@ -84,12 +84,22 @@ class DataLoader:
             raise ValueError(error_msg)
 
         self.target_mode = normalize_target_mode(target_mode)
-        df, derived_columns = ensure_target_mode_columns(
-            df,
-            report_target_column=target_column,
-            target_mode=self.target_mode,
-        )
-        self.derived_columns = derived_columns
+        self.derived_columns = []
+
+        required_target_mode_columns = []
+        if self.target_mode == "psi_over_npl":
+            required_target_mode_columns = [NPL_COLUMN, PSI_COLUMN]
+
+        missing_target_mode_columns = [
+            column for column in required_target_mode_columns if column not in df.columns
+        ]
+        if missing_target_mode_columns:
+            error_msg = (
+                "Processed input is missing target-mode helper columns: "
+                f"{missing_target_mode_columns}. Run scripts/compute_feature_parameters.py first."
+            )
+            logger.error(error_msg)
+            raise ValueError(error_msg)
 
         # Validate required columns
         if self.required_columns:
@@ -107,7 +117,7 @@ class DataLoader:
 
         # Separate features and target
         self.target_name = target_column
-        target_raw = df[target_column].copy()
+        target_raw = cast(pd.Series, df[target_column].copy())
         self.training_target_name = get_training_target_name(target_column, self.target_mode)
         training_target_raw = compute_training_target(
             df,

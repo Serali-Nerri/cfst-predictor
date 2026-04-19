@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from src.predictor import Predictor
+from src.predictor import Predictor, compare_predictions, export_predictions
 
 
 class StubModel:
@@ -64,7 +66,7 @@ def test_predict_batch_matches_direct_predict():
     assert np.allclose(direct, batched)
 
 
-def test_predict_restores_nexp_for_psi_target_without_requiring_nexp_input():
+def test_predict_restores_nexp_for_psi_target_with_precomputed_npl_input():
     predictor = Predictor(
         model=ConstantModel(np.log(0.8)),
         feature_names=["As (mm^2)", "Ac (mm^2)", "fy (MPa)", "fc (MPa)", "Npl (kN)"],
@@ -85,10 +87,30 @@ def test_predict_restores_nexp_for_psi_target_without_requiring_nexp_input():
             "Ac (mm^2)": [2000.0, 1800.0],
             "fy (MPa)": [300.0, 320.0],
             "fc (MPa)": [40.0, 50.0],
+            "Npl (kN)": [380.0, 474.0],
         }
     )
 
     predictions = predictor.predict(X)
 
-    expected_npl = np.array([(1000.0 * 300.0 + 2000.0 * 40.0) / 1000.0, (1200.0 * 320.0 + 1800.0 * 50.0) / 1000.0])
-    assert np.allclose(predictions, 0.8 * expected_npl)
+    assert np.allclose(predictions, np.array([304.0, 379.2]))
+
+
+def test_export_predictions_accepts_python_list(tmp_path):
+    X = pd.DataFrame({"a": [1.0]})
+    output_path = tmp_path / "predictions.csv"
+
+    export_predictions(X, [3.5], str(output_path))
+
+    exported = pd.read_csv(output_path)
+    assert exported["prediction"].tolist() == [3.5]
+
+
+def test_compare_predictions_rejects_row_count_mismatch(tmp_path):
+    actual_path = tmp_path / "actual.csv"
+    pred_path = tmp_path / "pred.csv"
+    pd.DataFrame({"actual": [1.0, 2.0, 3.0]}).to_csv(actual_path, index=False)
+    pd.DataFrame({"prediction": [0.9, 1.9]}).to_csv(pred_path, index=False)
+
+    with pytest.raises(Exception, match="same number of rows"):
+        compare_predictions(str(actual_path), str(pred_path))

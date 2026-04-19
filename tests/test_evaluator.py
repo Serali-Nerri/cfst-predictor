@@ -78,6 +78,19 @@ def test_regime_schema_reuses_train_quantile_edges_on_test_split():
     assert "worst_r2_group" in results["scale_npl"]
 
 
+def test_get_best_model_handles_missing_metric_value():
+    evaluator = Evaluator()
+    result = evaluator.get_best_model(
+        [
+            {"model_name": "model_a", "metrics": {"rmse": None}},
+            {"model_name": "model_b", "metrics": {"rmse": 1.0}},
+        ],
+        metric="rmse",
+    )
+
+    assert result["model_name"] == "model_b"
+
+
 def test_regime_schema_supports_fixed_bins_and_sorts_groups_by_cov():
     evaluator = Evaluator()
     regime_config = {

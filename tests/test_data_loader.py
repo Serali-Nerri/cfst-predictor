@@ -60,6 +60,15 @@ def test_load_data_without_transform_returns_original_target(tmp_path):
     )
 
 
+def test_load_data_rejects_invalid_log_target_domain(tmp_path):
+    csv_path = tmp_path / "data.csv"
+    pd.DataFrame({"feat": [1.0, 2.0], "Nexp (kN)": [0.0, 10.0]}).to_csv(csv_path, index=False)
+
+    loader = DataLoader(required_columns=["Nexp (kN)"])
+    with pytest.raises(ValueError, match="log target transform requires all target values to be finite and > 0"):
+        loader.load_data(str(csv_path), "Nexp (kN)", target_transform="log")
+
+
 def test_load_data_raises_when_target_column_missing(tmp_path):
     csv_path = tmp_path / "data.csv"
     pd.DataFrame({"feat": [1.0, 2.0]}).to_csv(csv_path, index=False)
@@ -69,21 +78,36 @@ def test_load_data_raises_when_target_column_missing(tmp_path):
         loader.load_data(str(csv_path), "Nexp (kN)")
 
 
-def test_load_data_builds_psi_target_and_derived_columns(tmp_path):
+def test_load_data_requires_precomputed_psi_target_columns(tmp_path):
     csv_path = tmp_path / "data.csv"
     df = pd.DataFrame(
         {
-            "As (mm^2)": [1000.0, 1000.0],
-            "Ac (mm^2)": [2000.0, 2000.0],
-            "fy (MPa)": [300.0, 300.0],
-            "fc (MPa)": [40.0, 40.0],
-            "b (mm)": [100.0, 120.0],
-            "h (mm)": [100.0, 120.0],
-            "r0 (mm)": [50.0, 0.0],
-            "L (mm)": [300.0, 600.0],
-            "e1 (mm)": [0.0, 10.0],
-            "e2 (mm)": [0.0, 0.0],
+            "feat": [1.0, 2.0],
             "Nexp (kN)": [380.0, 304.0],
+        }
+    )
+    df.to_csv(csv_path, index=False)
+
+    loader = DataLoader(required_columns=["Nexp (kN)"])
+    with pytest.raises(ValueError, match="Processed input is missing target-mode helper columns"):
+        loader.load_data(
+            str(csv_path),
+            "Nexp (kN)",
+            target_transform=None,
+            target_mode="psi_over_npl",
+        )
+
+
+def test_load_data_uses_precomputed_psi_target_columns(tmp_path):
+    csv_path = tmp_path / "data.csv"
+    df = pd.DataFrame(
+        {
+            "feat": [1.0, 2.0],
+            "Nexp (kN)": [380.0, 304.0],
+            "Npl (kN)": [380.0, 380.0],
+            "psi": [1.0, 0.8],
+            "axial_flag": ["axial", "eccentric"],
+            "section_family": ["square", "rectangular"],
         }
     )
     df.to_csv(csv_path, index=False)
@@ -97,8 +121,7 @@ def test_load_data_builds_psi_target_and_derived_columns(tmp_path):
     )
 
     assert "Npl (kN)" in features.columns
-    assert "b/h" in features.columns
-    assert "L/h" in features.columns
+    assert "psi" not in features.columns
     assert "axial_flag" in features.columns
     assert "section_family" in features.columns
     assert np.allclose(target.to_numpy(dtype=float), np.array([1.0, 0.8]))

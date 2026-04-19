@@ -1,4 +1,6 @@
+import numpy as np
 import pandas as pd
+import pytest
 
 from src.splitting import build_regression_stratification_labels
 
@@ -36,3 +38,19 @@ def test_regression_stratification_tries_non_prefix_auxiliary_subsets():
     assert labels.nunique() > 1
     assert used_columns == ["lambda_bar"]
     assert any(item["columns"] == ["lambda_bar"] for item in candidate_subsets)
+
+
+def test_regression_stratification_rejects_non_finite_values():
+    features = pd.DataFrame({"lambda_bar": [0.1, np.nan, 0.3, 0.4]})
+    target = pd.Series([1.0, 2.0, 3.0, 4.0], dtype=float)
+
+    with pytest.raises(ValueError, match="Stratification values must be finite"):
+        build_regression_stratification_labels(
+            features=features,
+            target_raw=target,
+            split_config={
+                "target_bins": 2,
+                "auxiliary_features": [{"column": "lambda_bar", "bins": 2}],
+            },
+            minimum_count=2,
+        )

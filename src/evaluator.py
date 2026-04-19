@@ -572,15 +572,22 @@ class Evaluator:
         # Determine if higher or lower is better
         lower_is_better = metric in ['rmse', 'mae', 'mape']
 
+        def metric_value(result: Dict[str, Any]) -> float:
+            raw_value = result.get('metrics', {}).get(metric)
+            if raw_value is None:
+                return float('inf') if lower_is_better else float('-inf')
+            return float(raw_value)
+
         # Find best model
         if lower_is_better:
-            best_result = min(model_results, key=lambda x: x.get('metrics', {}).get(metric, float('inf')))
+            best_result = min(model_results, key=metric_value)
         else:
-            best_result = max(model_results, key=lambda x: x.get('metrics', {}).get(metric, float('-inf')))
+            best_result = max(model_results, key=metric_value)
 
         best_model_name = best_result.get('model_name', 'unknown')
         best_value = best_result.get('metrics', {}).get(metric)
+        best_value_text = f"{best_value:.4f}" if isinstance(best_value, (int, float)) else "N/A"
 
-        logger.info(f"Best model: {best_model_name} ({metric}: {best_value:.4f})")
+        logger.info(f"Best model: {best_model_name} ({metric}: {best_value_text})")
 
         return best_result

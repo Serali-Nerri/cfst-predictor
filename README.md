@@ -4,8 +4,8 @@
 
 本项目使用 `XGBoost` 构建一个面向混凝土填充钢管（CFST）柱极限承载力预测的机器学习流水线，覆盖以下当前已实现的能力：
 
-- 从 CSV 加载数据并提取报告目标列
-- 运行时补算 `Npl (kN)`、`psi = Nexp / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family`
+- 从已处理的特征 CSV 加载数据并提取报告目标列
+- 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`psi = Nexp / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family` 等派生列
 - 先划分训练/测试集，再进行预处理，避免预处理数据泄漏
 - 按配置剔除指定特征列
 - 训练 `XGBRegressor`
@@ -97,8 +97,8 @@ xgboost/
 当前训练脚本 `train.py` 的真实流程为：
 
 1. 读取 `config/config.yaml`
-2. 从 CSV 加载报告目标 `Nexp (kN)`，并按 `target_mode` 构造训练目标
-3. 运行时补算 `Npl / psi / b/h / L/h / axial_flag / section_family`
+2. 从已处理的特征 CSV 加载报告目标 `Nexp (kN)`，并按 `target_mode` 构造训练目标
+3. 训练前假定 `scripts/compute_feature_parameters.py` 已离线生成 `Npl / psi / b/h / L/h / axial_flag / section_family`
 4. 先划分 `train/test`
 5. 在 `train_full` 上执行 `CV` / `Optuna`；各 fold 内部按 `validation_size` 切验证集用于早停
 6. 使用 `CV` 复合目标选择参数，并根据各 fold `best_iteration` 选取最终 `n_estimators`
@@ -257,8 +257,8 @@ output/psi_over_npl_log_original_200/
 
 - 从模型目录加载 `xgboost_model.pkl`、`preprocessor.pkl`、`feature_names.json`、`training_metadata.json`
 - 读取输入 CSV
-- 按训练元数据自动补算缺失的派生列
-- 当模型主线为 `psi_over_npl` 时，输入不需要提供 `psi` 或 `Nexp (kN)`；只要输入特征足够补算 `Npl (kN)` 即可
+- 假定输入是已经由 `scripts/compute_feature_parameters.py` 生成的 processed 特征表
+- 当模型主线为 `psi_over_npl` 时，输入需要包含 `Npl (kN)`，但不需要提供 `psi` 或 `Nexp (kN)`
 - 在需要时将模型输出从 `psi` / `log(psi)` 恢复到 `Nexp`
 - 进行单条或批量预测
 - 可选导出 CSV
@@ -266,7 +266,7 @@ output/psi_over_npl_log_original_200/
 ### 批量预测
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_200 --input data/raw/all.csv --output output/predictions.csv
+python predict.py --model output/psi_over_npl_log_original_200 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv
 ```
 
 参数说明：
@@ -282,7 +282,7 @@ python predict.py --model output/psi_over_npl_log_original_200 --input data/raw/
 当前实现不是交互式输入，而是：
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_200 --input data/raw/one_row.csv --single
+python predict.py --model output/psi_over_npl_log_original_200 --input data/processed/one_row_feature_parameters_raw.csv --single
 ```
 
 在 `--single` 模式下：
@@ -331,14 +331,14 @@ python train.py --config config/config.yaml
 
 ### 1. `psi_over_npl` 推理仍依赖足够的原始特征
 
-当训练主线是 `psi = Nexp / Npl` 时，推理脚本会自动把模型输出恢复回 `Nexp`，但前提是输入 CSV 里至少包含足够补算 `Npl (kN)` 的特征列：
+当训练主线是 `psi = Nexp / Npl` 时，推理脚本会自动把模型输出恢复回 `Nexp`，但前提是输入 CSV 已经是 processed 特征表，并包含 `Npl (kN)`。
 
-- `As (mm^2)`
-- `Ac (mm^2)`
-- `fy (MPa)`
-- `fc (MPa)`
+当前推荐流程是：
 
-如果这些列缺失，推理脚本无法完成 `psi -> Nexp` 的恢复。
+1. 先对原始数据运行 `scripts/compute_feature_parameters.py`
+2. 再将生成的 processed 特征表输入 `predict.py`
+
+如果输入里缺少 `Npl (kN)`，推理脚本无法完成 `psi -> Nexp` 的恢复。
 
 ### 2. `sqrt` 目标变换不是当前默认主线
 

@@ -9,6 +9,7 @@ import src.model_trainer as model_trainer_module
 from src.model_trainer import (
     ModelTrainer,
     _build_selection_objective_config,
+    _calculate_regression_metrics,
     _calculate_selection_objective,
 )
 
@@ -170,3 +171,87 @@ def test_selection_objective_matches_planned_formula():
 def test_selection_objective_rejects_unsupported_metric_space():
     with pytest.raises(ValueError, match="selection_objective.metric_space"):
         _build_selection_objective_config({"metric_space": "transformed"})
+
+
+def test_cross_validate_uses_requested_metric_space_for_selection(monkeypatch):
+    trainer = ModelTrainer(
+        params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+        target_mode="psi_over_npl",
+        target_transform_type=None,
+        validation_size=0.0,
+    )
+    splitter = RecordingSplitter()
+    X = pd.DataFrame(
+        {
+            "feature_a": [0.0, 1.0, 2.0, 3.0],
+            "Npl (kN)": [100.0, 200.0, 100.0, 200.0],
+        }
+    )
+    y = pd.Series([1.0, 1.0, 2.0, 2.0])
+    y_report = pd.Series([100.0, 200.0, 200.0, 400.0])
+
+    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", ConstantPsiRegressor)
+
+    original_results = trainer.cross_validate(
+        X,
+        y,
+        y_report=y_report,
+        cv=splitter,
+        metric_space="original",
+    )
+    transformed_results = trainer.cross_validate(
+        X,
+        y,
+        y_report=y_report,
+        cv=splitter,
+        metric_space="transformed",
+    )
+
+    selection_objective = _build_selection_objective_config(
+        {
+            "metric_space": "original_nexp",
+            "rmse_normalizer": "mean_actual",
+            "cov_threshold": 0.10,
+            "r2_threshold": 0.99,
+            "cov_weight": 2.0,
+            "r2_weight": 2.0,
+        }
+    )
+    expected_original_scores = [
+        _calculate_selection_objective(
+            _calculate_regression_metrics(
+                np.array([200.0, 400.0]),
+                np.array([150.0, 300.0]),
+            ),
+            selection_objective,
+        ),
+        _calculate_selection_objective(
+            _calculate_regression_metrics(
+                np.array([100.0, 200.0]),
+                np.array([150.0, 300.0]),
+            ),
+            selection_objective,
+        ),
+    ]
+    expected_transformed_scores = [
+        _calculate_selection_objective(
+            _calculate_regression_metrics(
+                np.array([2.0, 2.0]),
+                np.array([1.5, 1.5]),
+            ),
+            selection_objective,
+        ),
+        _calculate_selection_objective(
+            _calculate_regression_metrics(
+                np.array([1.0, 1.0]),
+                np.array([1.5, 1.5]),
+            ),
+            selection_objective,
+        ),
+    ]
+
+    assert original_results["mean_cv_score"] == pytest.approx(np.mean(expected_original_scores))
+    assert transformed_results["mean_cv_score"] == pytest.approx(np.mean(expected_transformed_scores))
+    assert all(detail["selection_metric_space"] == "original" for detail in original_results["fold_details"])
+    assert all(detail["selection_metric_space"] == "transformed" for detail in transformed_results["fold_details"])
+    assert original_results["mean_cv_score"] != transformed_results["mean_cv_score"]

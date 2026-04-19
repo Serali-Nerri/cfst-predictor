@@ -593,8 +593,15 @@ class ModelTrainer:
                 y_true_report,
                 y_pred_report,
             )
+            training_metrics = _calculate_regression_metrics(
+                y_test_fold,
+                y_pred,
+            )
+            score_metrics = (
+                training_metrics if scoring_space == "transformed" else report_metrics
+            )
             fold_score = _calculate_selection_objective(
-                report_metrics,
+                score_metrics,
                 self.selection_objective,
             )
             transformed_rmse = float(np.sqrt(mean_squared_error(y_test_fold, y_pred)))
@@ -609,10 +616,13 @@ class ModelTrainer:
                 {
                     "fold": fold_index + 1,
                     "selection_score": float(fold_score),
+                    "selection_metric_space": scoring_space,
                     "rmse_original_space": float(rmse_value) if rmse_value is not None else None,
                     "r2_original_space": float(r2_value) if r2_value is not None else None,
                     "cov_original_space": report_metrics["cov"],
                     "rmse_training_space": transformed_rmse,
+                    "r2_training_space": training_metrics["r2"],
+                    "cov_training_space": training_metrics["cov"],
                     "n_train_outer": int(len(train_idx)),
                     "n_test_outer": int(len(test_idx)),
                     "n_train_inner": int(len(X_fit)),

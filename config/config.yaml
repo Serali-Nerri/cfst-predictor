@@ -1,7 +1,7 @@
 # log(psi)-space training + original-Nexp selection metric
 
 data:
-  file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
+  file_path: "data/processed/final_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
   target_mode: "psi_over_npl"
 
@@ -109,7 +109,7 @@ evaluation:
         bins: 4
 
 paths:
-  output_dir: "output/psi_over_npl_log_original_200"
+  output_dir: "output/psi_over_npl_log_original_final_noopt"
   model_dir: "models"
   model_output: "xgboost_model.pkl"
   preprocessor_output: "preprocessor.pkl"

@@ -7,12 +7,11 @@ input validation, and prediction export functionality.
 
 import pandas as pd
 import numpy as np
-from typing import Union, List, Any, Optional, Tuple, Dict
+from typing import Union, List, Any, Optional, Dict, cast
 from pathlib import Path
 
 from src.domain_features import (
     REPORT_TARGET_COLUMN_DEFAULT,
-    ensure_prediction_feature_columns,
     normalize_target_mode,
     restore_report_target,
 )
@@ -108,13 +107,7 @@ class Predictor:
         logger.info(f"Making predictions on {len(X)} samples")
 
         try:
-            # Make a copy to avoid modifying original data
-            X_processed, derived_columns = ensure_prediction_feature_columns(
-                X.copy(),
-                target_mode=self._get_target_mode(),
-            )
-            if derived_columns:
-                logger.debug(f"Prediction-time derived columns added: {derived_columns}")
+            X_processed = X.copy()
             X_reference = X_processed.copy()
 
             # Validate input
@@ -297,7 +290,7 @@ class Predictor:
             # For now, return the feature values themselves
             # In the future, this would calculate SHAP values
             if self.feature_names:
-                contributions = X[self.feature_names].copy()
+                contributions = cast(pd.DataFrame, X[self.feature_names].copy())
             else:
                 contributions = X.copy()
 
@@ -310,7 +303,7 @@ class Predictor:
             raise Exception(error_msg)
 
 
-def export_predictions(X: pd.DataFrame, predictions: np.ndarray,
+def export_predictions(X: pd.DataFrame, predictions: Union[np.ndarray, List[float]],
                       output_path: str, include_features: bool = True) -> None:
     """
     Export predictions to CSV file with optional feature inclusion.
@@ -327,6 +320,8 @@ def export_predictions(X: pd.DataFrame, predictions: np.ndarray,
     logger.info(f"Exporting predictions to {output_path}")
 
     try:
+        prediction_array = np.asarray(predictions, dtype=float).reshape(-1)
+
         # Create output DataFrame
         if include_features:
             output_df = X.copy()
@@ -334,7 +329,7 @@ def export_predictions(X: pd.DataFrame, predictions: np.ndarray,
             output_df = pd.DataFrame()
 
         # Add prediction column
-        output_df['prediction'] = predictions
+        output_df['prediction'] = prediction_array
 
         # Create output directory
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -343,7 +338,10 @@ def export_predictions(X: pd.DataFrame, predictions: np.ndarray,
         output_df.to_csv(output_path, index=False)
 
         logger.info(f"Predictions exported successfully: {len(output_df)} rows, {len(output_df.columns)} columns")
-        logger.debug(f"Prediction statistics - Min: {predictions.min():.4f}, Max: {predictions.max():.4f}, Mean: {predictions.mean():.4f}")
+        logger.debug(
+            f"Prediction statistics - Min: {prediction_array.min():.4f}, "
+            f"Max: {prediction_array.max():.4f}, Mean: {prediction_array.mean():.4f}"
+        )
 
     except Exception as e:
         error_msg = f"Failed to export predictions: {str(e)}"
@@ -400,9 +398,17 @@ def compare_predictions(actual_path: str, prediction_path: str,
         actual_df = pd.read_csv(actual_path)
         pred_df = pd.read_csv(prediction_path)
 
+        if 'prediction' not in pred_df.columns:
+            raise ValueError("Prediction file must contain a 'prediction' column")
+        if len(actual_df) != len(pred_df):
+            raise ValueError(
+                "Actual and prediction files must contain the same number of rows "
+                f"(got {len(actual_df)} and {len(pred_df)})"
+            )
+
         # Merge dataframes
         comparison_df = pred_df.copy()
-        comparison_df['actual'] = actual_df.iloc[:, -1]  # Assume actual is last column
+        comparison_df['actual'] = actual_df.iloc[:, -1].to_numpy()  # Assume actual is last column
 
         # Calculate errors
         comparison_df['error'] = comparison_df['actual'] - comparison_df['prediction']

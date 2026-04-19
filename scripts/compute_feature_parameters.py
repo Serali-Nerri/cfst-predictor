@@ -53,8 +53,9 @@ INPUT_ALIASES = {
     "e1 (mm)": ("e1 (mm)",),
     "e2 (mm)": ("e2 (mm)",),
     "Nexp (kN)": ("Nexp (kN)",),
+    "Group": ("Group",),
 }
-OPTIONAL_INPUT_COLUMNS = {"Nexp (kN)"}
+OPTIONAL_INPUT_COLUMNS = {"Nexp (kN)", "Group"}
 
 STEEL_ELASTIC_MODULUS = 206000.0
 PLACEHOLDER_VALUES = {"", "-", "--", "—", "–", "NA", "N/A", "na", "nan", "NaN"}
@@ -121,10 +122,18 @@ def parse_float(row: dict[str, str], column_name: str, row_number: int) -> float
 
 def parse_source_row(
     row: dict[str, str], column_mapping: dict[str, str], row_number: int
-) -> dict[str, float]:
-    parsed: dict[str, float] = {}
+) -> dict[str, float | str]:
+    parsed: dict[str, float | str] = {}
     errors: list[str] = []
     for output_name, input_name in column_mapping.items():
+        if output_name == "Group":
+            raw_value = row[input_name]
+            if raw_value is None:
+                continue
+            value = raw_value.strip()
+            if value and value not in PLACEHOLDER_VALUES:
+                parsed[output_name] = value
+            continue
         try:
             parsed[output_name] = parse_float(row, input_name, row_number)
         except ValueError as exc:
@@ -180,7 +189,20 @@ def safe_divide(numerator: float, denominator: float) -> float:
     return numerator / denominator
 
 
-def infer_section_family(width: float, height: float, radius: float) -> str:
+def infer_section_family(
+    width: float,
+    height: float,
+    radius: float,
+    group: str | None = None,
+) -> str:
+    normalized_group = group.strip().upper() if group else None
+    if normalized_group == "A":
+        return "square" if abs(width - height) <= 1e-6 else "rectangular"
+    if normalized_group == "B":
+        return "circular"
+    if normalized_group == "C":
+        return "obround"
+
     aspect_ratio = safe_divide(width, height)
     radius_ratio = safe_divide(radius, height)
     if abs(aspect_ratio - 1.0) <= 1e-6 and abs(radius_ratio - 0.5) <= 1e-3:
@@ -192,18 +214,21 @@ def infer_section_family(width: float, height: float, radius: float) -> str:
     return "rectangular"
 
 
-def compute_feature_row(source: dict[str, float], row_number: int) -> list[object]:
-    b = source["b (mm)"]
-    h = source["h (mm)"]
-    t = source["t (mm)"]
-    r0 = source["r0 (mm)"]
-    replacement_ratio = source["R (%)"]
-    fy = source["fy (MPa)"]
-    fc = source["fc (MPa)"]
-    length = source["L (mm)"]
-    e1 = source["e1 (mm)"]
-    e2 = source["e2 (mm)"]
-    nexp = source.get("Nexp (kN)")
+def compute_feature_row(source: dict[str, float | str], row_number: int) -> list[object]:
+    b = float(source["b (mm)"])
+    h = float(source["h (mm)"])
+    t = float(source["t (mm)"])
+    r0 = float(source["r0 (mm)"])
+    replacement_ratio = float(source["R (%)"])
+    fy = float(source["fy (MPa)"])
+    fc = float(source["fc (MPa)"])
+    length = float(source["L (mm)"])
+    e1 = float(source["e1 (mm)"])
+    e2 = float(source["e2 (mm)"])
+    nexp_raw = source.get("Nexp (kN)")
+    nexp = float(nexp_raw) if nexp_raw is not None else None
+    group_raw = source.get("Group")
+    group = str(group_raw) if group_raw is not None else None
 
     if b <= 0 or h <= 0:
         raise ValueError(f"Row {row_number}: b and h must be positive.")
@@ -264,7 +289,7 @@ def compute_feature_row(source: dict[str, float], row_number: int) -> list[objec
     section_modulus = total_inertia / (h / 2.0)
     e_bar = eccentricity * total_area / section_modulus
     axial_flag = "axial" if abs(e_bar) <= 1e-12 else "eccentric"
-    section_family = infer_section_family(b, h, r0)
+    section_family = infer_section_family(b, h, r0, group)
     npl_kn = npl / 1000.0
     psi = safe_divide(nexp, npl_kn) if nexp is not None else None
 

@@ -11,7 +11,7 @@
   - 报告目标：`Nexp (kN)`
   - 训练目标：`psi = Nexp / Npl`
   - 可选训练变换：`log(psi)`
-- 当前运行时会补算并保留以下派生列：
+- 当前主线会由 `scripts/compute_feature_parameters.py` 离线生成并保留以下派生列：
   - `Npl (kN)`
   - `psi`（仅当样本存在 `Nexp (kN)` 时可持久化输出）
   - `b/h`
