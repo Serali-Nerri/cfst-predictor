@@ -6,7 +6,7 @@ This module handles model evaluation and metrics calculation for regression task
 
 import numpy as np
 import pandas as pd
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional, Protocol, cast
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from pathlib import Path
 import json
@@ -19,6 +19,16 @@ from src.splitting import (
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class RegressionModelProtocol(Protocol):
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> Any:
+        ...
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        ...
+
+
 VALID_REGIME_SORT_METRICS = {
     "rmse",
     "mae",
@@ -28,6 +38,64 @@ VALID_REGIME_SORT_METRICS = {
     "std_ratio",
     "n_samples",
 }
+
+
+def _calculate_cov_statistics(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+) -> Dict[str, Optional[float]]:
+    ratios = y_pred / y_true
+    valid_mask = np.isfinite(ratios) & (y_true != 0)
+    valid_ratios = ratios[valid_mask]
+    if len(valid_ratios) == 0:
+        return {"cov": None, "mean_ratio": None, "std_ratio": None}
+
+    mean_ratio = float(np.mean(valid_ratios))
+    std_ratio = float(np.std(valid_ratios, ddof=1)) if len(valid_ratios) > 1 else 0.0
+    cov = std_ratio / mean_ratio if mean_ratio != 0 else None
+    return {
+        "cov": float(cov) if cov is not None else None,
+        "mean_ratio": mean_ratio,
+        "std_ratio": std_ratio,
+    }
+
+
+def calculate_regression_metrics(
+    y_true: pd.Series | np.ndarray,
+    y_pred: pd.Series | np.ndarray,
+) -> Dict[str, Optional[float]]:
+    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
+    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
+
+    mse = float(mean_squared_error(y_true_array, y_pred_array))
+    rmse = float(np.sqrt(mse))
+    mae = float(mean_absolute_error(y_true_array, y_pred_array))
+    r2 = float(r2_score(y_true_array, y_pred_array))
+    max_error = float(np.max(np.abs(y_true_array - y_pred_array)))
+    mean_pred = float(np.mean(y_pred_array))
+    mean_true = float(np.mean(y_true_array))
+
+    non_zero_mask = y_true_array != 0
+    mape = (
+        float(np.mean(np.abs((y_true_array[non_zero_mask] - y_pred_array[non_zero_mask]) / y_true_array[non_zero_mask])) * 100)
+        if non_zero_mask.any()
+        else None
+    )
+    cov_stats = _calculate_cov_statistics(y_true_array, y_pred_array)
+    return {
+        "rmse": rmse,
+        "mae": mae,
+        "r2": r2,
+        "mape": mape,
+        "mse": mse,
+        "max_error": max_error,
+        "mean_prediction": mean_pred,
+        "mean_actual": mean_true,
+        "cov": cov_stats["cov"],
+        "mean_ratio": cov_stats["mean_ratio"],
+        "std_ratio": cov_stats["std_ratio"],
+        "n_samples": len(y_true_array),
+    }
 
 
 def _normalize_regime_sort_metric(raw_metric: Optional[str]) -> str:
@@ -75,7 +143,11 @@ class Evaluator:
         self.metrics_history = []
         logger.info("Evaluator initialized")
 
-    def calculate_metrics(self, y_true: pd.Series, y_pred: np.ndarray) -> Dict[str, float]:
+    def calculate_metrics(
+        self,
+        y_true: pd.Series | np.ndarray,
+        y_pred: pd.Series | np.ndarray,
+    ) -> Dict[str, Optional[float]]:
         """
         Calculate comprehensive evaluation metrics.
 
@@ -91,115 +163,32 @@ class Evaluator:
         """
         logger.info("Calculating evaluation metrics")
 
-        # Validate inputs
         if len(y_true) != len(y_pred):
             error_msg = f"Length mismatch: y_true ({len(y_true)}) vs y_pred ({len(y_pred)})"
             logger.error(error_msg)
             raise ValueError(error_msg)
 
-        # Convert to numpy arrays for calculations
-        y_true_array = np.array(y_true).flatten()
-        y_pred_array = np.array(y_pred).flatten()
-
-        # Check for NaN values
+        y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
+        y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
         if np.isnan(y_true_array).any() or np.isnan(y_pred_array).any():
             logger.warning("NaN values detected in predictions or targets")
 
-        # Calculate metrics
-        try:
-            # RMSE (Root Mean Squared Error)
-            rmse = np.sqrt(mean_squared_error(y_true_array, y_pred_array))
+        metrics = calculate_regression_metrics(y_true_array, y_pred_array)
+        logger.info(f"RMSE: {metrics['rmse']:.4f}")
+        logger.info(f"MAE: {metrics['mae']:.4f}")
+        logger.info(f"R²: {metrics['r2']:.4f}")
+        if metrics["mape"] is None:
+            logger.warning("Cannot calculate MAPE: all true values are zero")
+        else:
+            logger.info(f"MAPE: {metrics['mape']:.2f}%")
+        logger.info(f"Max Error: {metrics['max_error']:.4f}")
+        if metrics["cov"] is not None:
+            logger.info(
+                f"COV: {metrics['cov']:.4f} "
+                f"(μ={metrics['mean_ratio']:.4f}, σ={metrics['std_ratio']:.4f})"
+            )
 
-            # MAE (Mean Absolute Error)
-            mae = mean_absolute_error(y_true_array, y_pred_array)
-
-            # R² (Coefficient of Determination)
-            r2 = r2_score(y_true_array, y_pred_array)
-
-            # MAPE (Mean Absolute Percentage Error)
-            # Avoid division by zero
-            mask = y_true_array != 0
-            if mask.sum() > 0:
-                mape = np.mean(np.abs((y_true_array[mask] - y_pred_array[mask]) / y_true_array[mask])) * 100
-            else:
-                mape = np.nan
-                logger.warning("Cannot calculate MAPE: all true values are zero")
-
-            # Additional metrics
-            mse = mean_squared_error(y_true_array, y_pred_array)
-
-            # Calculate max error
-            max_error = np.max(np.abs(y_true_array - y_pred_array))
-
-            # Calculate mean prediction
-            mean_pred = np.mean(y_pred_array)
-            mean_true = np.mean(y_true_array)
-
-            # Calculate Coefficient of Variation (COV)
-            # COV = σ / μ where ξ_i = y_pred_i / y_test_i
-            # In civil engineering, COV assesses prediction stability and dispersion
-            try:
-                # Calculate ratio ξ_i = y_pred_i / y_test_i for each sample
-                # ξ > 1: prediction larger than actual (potentially unsafe)
-                # ξ < 1: prediction conservative/safe
-                ratios = y_pred_array / y_true_array
-
-                # Filter out invalid ratios (inf, NaN, caused by division by zero)
-                valid_mask = np.isfinite(ratios) & (y_true_array != 0)
-                valid_ratios = ratios[valid_mask]
-
-                if len(valid_ratios) > 0:
-                    # Calculate mean μ and standard deviation σ of ξ_i
-                    mean_ratio = np.mean(valid_ratios)
-                    std_ratio = np.std(valid_ratios, ddof=1)  # Sample standard deviation
-
-                    # Calculate COV = σ / μ
-                    # μ ≈ 1.0 indicates no systematic bias
-                    cov = std_ratio / mean_ratio if mean_ratio != 0 else np.nan
-
-                    logger.info(f"COV: {cov:.4f} (μ={mean_ratio:.4f}, σ={std_ratio:.4f})")
-                    logger.info(f"Ratio range: [{np.min(valid_ratios):.4f}, {np.max(valid_ratios):.4f}]")
-                else:
-                    cov = np.nan
-                    logger.warning("Cannot calculate COV: no valid ratios (all y_test_i = 0 or infinite)")
-
-            except Exception as e:
-                cov = np.nan
-                logger.warning(f"COV calculation failed: {str(e)}")
-
-            # Create metrics dictionary
-            metrics = {
-                'rmse': float(rmse),
-                'mae': float(mae),
-                'r2': float(r2),
-                'mape': float(mape) if not np.isnan(mape) else None,
-                'mse': float(mse),
-                'max_error': float(max_error),
-                'mean_prediction': float(mean_pred),
-                'mean_actual': float(mean_true),
-                'cov': float(cov) if not np.isnan(cov) else None,
-                'mean_ratio': float(mean_ratio) if 'mean_ratio' in locals() and not np.isnan(mean_ratio) else None,
-                'std_ratio': float(std_ratio) if 'std_ratio' in locals() and not np.isnan(std_ratio) else None,
-                'n_samples': len(y_true_array)
-            }
-
-            # Log metrics
-            logger.info(f"RMSE: {rmse:.4f}")
-            logger.info(f"MAE: {mae:.4f}")
-            logger.info(f"R²: {r2:.4f}")
-            if not np.isnan(mape):
-                logger.info(f"MAPE: {mape:.2f}%")
-            logger.info(f"Max Error: {max_error:.4f}")
-            if not np.isnan(cov):
-                logger.info(f"COV: {cov:.4f}")
-                logger.info(f"Ratio Mean: {mean_ratio:.4f}, Std: {std_ratio:.4f}")
-
-            return metrics
-
-        except Exception as e:
-            error_msg = f"Failed to calculate metrics: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        return metrics
 
     def calculate_regime_metrics(
         self,
@@ -425,7 +414,7 @@ class Evaluator:
                 y_val_fold = y.iloc[val_idx]
 
                 # Clone and train model
-                fold_model = clone(model)
+                fold_model = cast(RegressionModelProtocol, clone(model))
                 fold_model.fit(X_train_fold, y_train_fold)
 
                 # Evaluate on validation set

@@ -41,6 +41,13 @@ def _coerce_auxiliary_specs(raw_specs: Any) -> List[Dict[str, Any]]:
     return normalized
 
 
+def _prepare_quantile_series(series: pd.Series) -> pd.Series:
+    series_float = cast(pd.Series, series.astype(float))
+    if (~np.isfinite(series_float)).any():
+        raise ValueError("Stratification values must be finite")
+    return series_float
+
+
 def _quantile_codes(series: pd.Series, n_bins: int) -> Tuple[pd.Series, int]:
     """
     Create stable quantile bin codes for splitting.
@@ -48,20 +55,21 @@ def _quantile_codes(series: pd.Series, n_bins: int) -> Tuple[pd.Series, int]:
     Uses raw-value qcut first. If duplicated quantile edges collapse bins, it falls back
     to rank-based qcut while still preserving the requested ordering.
     """
-    series_no_na = cast(pd.Series, series.astype(float))
-    if (~np.isfinite(series_no_na)).any():
-        raise ValueError("Stratification values must be finite")
+    series_no_na = _prepare_quantile_series(series)
     unique_count = int(series_no_na.nunique(dropna=True))
     effective_bins = min(max(2, int(n_bins)), unique_count)
     if effective_bins < 2:
         return pd.Series(["bin0"] * len(series_no_na), index=series_no_na.index), 1
 
     try:
-        raw_codes = pd.qcut(
-            series_no_na,
-            q=effective_bins,
-            labels=False,
-            duplicates="drop",
+        raw_codes = cast(
+            Optional[pd.Series],
+            pd.qcut(
+                series_no_na,
+                q=effective_bins,
+                labels=False,
+                duplicates="drop",
+            ),
         )
     except ValueError:
         raw_codes = None
@@ -71,14 +79,51 @@ def _quantile_codes(series: pd.Series, n_bins: int) -> Tuple[pd.Series, int]:
         return int_codes.map(lambda value: f"bin{value}"), int(int_codes.nunique())
 
     ranked = series_no_na.rank(method="first")
-    rank_codes = pd.qcut(
-        ranked,
-        q=effective_bins,
-        labels=False,
-        duplicates="drop",
+    rank_codes = cast(
+        pd.Series,
+        pd.qcut(
+            ranked,
+            q=effective_bins,
+            labels=False,
+            duplicates="drop",
+        ),
     )
     int_codes = cast(pd.Series, rank_codes.astype(int))
     return int_codes.map(lambda value: f"bin{value}"), int(int_codes.nunique())
+
+
+
+def _quantile_edges(series: pd.Series, n_bins: int, *, already_prepared: bool = False) -> List[float]:
+    series_float = cast(pd.Series, series if already_prepared else _prepare_quantile_series(series))
+    unique_count = int(series_float.nunique(dropna=True))
+    effective_bins = min(max(2, int(n_bins)), unique_count)
+    if effective_bins < 2:
+        return [float(series_float.min()), float(series_float.max())]
+
+    try:
+        _, raw_edges = pd.qcut(
+            series_float,
+            q=effective_bins,
+            duplicates="drop",
+            retbins=True,
+        )
+    except ValueError:
+        ranked = series_float.rank(method="first")
+        _, raw_edges = pd.qcut(
+            ranked,
+            q=effective_bins,
+            duplicates="drop",
+            retbins=True,
+        )
+        min_value = float(series_float.min())
+        max_value = float(series_float.max())
+        raw_edges_array = np.asarray(raw_edges, dtype=float)
+        return [
+            float(min_value + (max_value - min_value) * (edge - 1.0) / max(len(series_float) - 1, 1))
+            for edge in raw_edges_array
+        ]
+
+    return [float(edge) for edge in np.asarray(raw_edges, dtype=float)]
 
 
 def build_regression_stratification_labels(
@@ -132,7 +177,7 @@ def build_regression_stratification_labels(
 
             for spec in used_auxiliary_specs:
                 aux_component, bins_used = _quantile_codes(
-                    features[spec["column"]],
+                    cast(pd.Series, features[spec["column"]]),
                     int(spec["bins"]),
                 )
                 parts.append(
@@ -315,7 +360,7 @@ def fit_regime_schema(
     if isinstance(bins, bool) or not isinstance(bins, int) or bins < 2:
         raise ValueError(f"Invalid bins for regime '{regime_name}': {bins}")
 
-    series = cast(pd.Series, pd.Series(values).astype(float))
+    series = _prepare_quantile_series(pd.Series(values))
     unique_count = int(series.nunique(dropna=True))
     effective_bins = min(max(2, int(bins)), unique_count)
     if effective_bins < 2:
@@ -325,13 +370,7 @@ def fit_regime_schema(
         schema["ranges"] = [{"label": label, "lower": float(series.min()), "upper": float(series.max())}]
         return schema
 
-    _, edges = pd.qcut(
-        series,
-        q=effective_bins,
-        duplicates="drop",
-        retbins=True,
-    )
-    edge_list = [float(edge) for edge in edges]
+    edge_list = _quantile_edges(series, effective_bins, already_prepared=True)
     labels = [f"{regime_name}_q{idx + 1}" for idx in range(len(edge_list) - 1)]
     schema["bins_requested"] = int(bins)
     schema["bins_used"] = int(len(labels))

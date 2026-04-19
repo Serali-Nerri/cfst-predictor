@@ -40,7 +40,7 @@ from src.data_loader import DataLoader
 from src.preprocessor import Preprocessor
 from src.model_trainer import ModelTrainer, OPTUNA_SEARCH_SPACE_VERSION
 from src.evaluator import Evaluator
-from src.utils.model_utils import save_model
+from src.utils.model_utils import _make_serializable, save_model
 from src.splitting import (
     build_regression_stratification_labels,
     get_split_strategy,
@@ -295,9 +295,110 @@ def select_final_n_estimators(cv_results: Dict[str, Any], fallback: int) -> Tupl
     return int(np.median(np.asarray(best_iterations, dtype=int))), best_iterations
 
 
+def make_selection_metrics_cv(cv_results: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "composite_objective": cv_results["mean_cv_score"],
+        "rmse": cv_results.get("mean_cv_rmse"),
+        "r2": cv_results.get("mean_cv_r2"),
+        "cov": cv_results.get("mean_cv_cov"),
+    }
+
+
+def make_overfitting_summary(
+    train_metrics: Dict[str, Any],
+    test_metrics: Dict[str, Any],
+    train_metrics_trans: Dict[str, Any],
+    test_metrics_trans: Dict[str, Any],
+) -> Dict[str, Any]:
+    train_rmse = float(train_metrics["rmse"])
+    test_rmse = float(test_metrics["rmse"])
+    train_rmse_trans = float(train_metrics_trans["rmse"])
+    test_rmse_trans = float(test_metrics_trans["rmse"])
+    rmse_ratio_original = test_rmse / train_rmse
+    rmse_ratio_transformed = test_rmse_trans / train_rmse_trans
+    return {
+        "rmse_ratio_original": rmse_ratio_original,
+        "rmse_ratio_transformed": rmse_ratio_transformed,
+        "detected": rmse_ratio_original > 1.2,
+        "status": "overfitting" if rmse_ratio_original > 1.2 else "healthy",
+    }
+
+
+def make_data_split_summary(
+    X_train_full: pd.DataFrame,
+    X_test: pd.DataFrame,
+    test_size: float,
+    train_strata_full: Optional[pd.Series],
+    test_strata: Optional[pd.Series],
+) -> Dict[str, Any]:
+    return {
+        "n_train": len(X_train_full),
+        "n_test": len(X_test),
+        "test_size": test_size,
+        "n_train_fit": len(X_train_full),
+        "n_validation": 0,
+        "n_strata_train": int(train_strata_full.nunique()) if train_strata_full is not None else None,
+        "n_strata_test": int(test_strata.nunique()) if test_strata is not None else None,
+    }
+
+
+def make_common_artifact_payload(
+    *,
+    context_hash: str,
+    params_source: str,
+    final_model_params: Dict[str, Any],
+    optuna_run_info: Optional[Dict[str, Any]],
+    optuna_metric_space: str,
+    cv_metric_space: str,
+    selection_objective: Dict[str, Any],
+    target_metadata: Dict[str, Any],
+    split_strategy: str,
+    effective_split_strategy: str,
+    stratification_metadata: Dict[str, Any],
+    cv_results: Dict[str, Any],
+    train_metrics: Dict[str, Any],
+    test_metrics: Dict[str, Any],
+    train_metrics_trans: Dict[str, Any],
+    test_metrics_trans: Dict[str, Any],
+    regime_schema: Dict[str, Any],
+    train_regime_metrics: Dict[str, Any],
+    test_regime_metrics: Dict[str, Any],
+    final_n_estimators: int,
+    fold_best_iterations: List[int],
+) -> Dict[str, Any]:
+    return {
+        "context_hash": context_hash,
+        "params_source": params_source,
+        "final_model_params": final_model_params,
+        "optuna_run_info": optuna_run_info,
+        "optuna_metric_space": optuna_metric_space,
+        "cv_metric_space": cv_metric_space,
+        "selection_objective": selection_objective,
+        **target_metadata,
+        "split_strategy_requested": split_strategy,
+        "split_strategy_effective": effective_split_strategy,
+        "stratification_metadata": stratification_metadata,
+        "selection_metrics_cv": make_selection_metrics_cv(cv_results),
+        "train_metrics_original_space": train_metrics,
+        "train_full_apparent_metrics_original_space": train_metrics,
+        "test_metrics_original_space": test_metrics,
+        "train_metrics_transformed_space": train_metrics_trans,
+        "test_metrics_transformed_space": test_metrics_trans,
+        "regime_schema": regime_schema,
+        "train_regime_metrics_original_space": train_regime_metrics,
+        "test_regime_metrics_original_space": test_regime_metrics,
+        "final_n_estimators_from_cv": final_n_estimators,
+        "fold_best_iterations": fold_best_iterations,
+    }
+
+
+def make_serializable_cv_results(cv_results: Dict[str, Any]) -> Dict[str, Any]:
+    return cast(Dict[str, Any], _make_serializable(cv_results))
+
+
 def build_cv_splitter(
     cv_config: Dict[str, Any], split_strategy: str
-) -> KFold:
+) -> KFold | StratifiedKFold:
     """Build a CV splitter from config.cv settings."""
     n_splits = get_cv_n_splits(cv_config)
     shuffle = cv_config.get("shuffle", False)
@@ -547,8 +648,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 y_test_trans,
                 y_train_report_full,
                 y_test_report,
-                y_train_model_raw_full,
-                y_test_model_raw,
+                _,
+                _,
                 train_strata_full,
                 test_strata,
             ) = split_result
@@ -579,8 +680,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 y_test_trans,
                 y_train_report_full,
                 y_test_report,
-                y_train_model_raw_full,
-                y_test_model_raw,
+                _,
+                _,
             ) = split_result
             train_strata_full = None
             test_strata = None
@@ -757,16 +858,18 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
 
         # Calculate metrics in ORIGINAL space (recommended - true application scenario)
         train_metrics = evaluator.calculate_metrics(
-            y_train_report_full, y_train_pred_orig
+            y_train_report_full, np.asarray(y_train_pred_orig, dtype=float)
         )
-        test_metrics = evaluator.calculate_metrics(y_test_report, y_test_pred_orig)
+        test_metrics = evaluator.calculate_metrics(
+            y_test_report, np.asarray(y_test_pred_orig, dtype=float)
+        )
 
         # Also calculate metrics in transformed space (for reference)
         train_metrics_trans = evaluator.calculate_metrics(
-            y_train_trans_full, y_train_pred_trans
+            y_train_trans_full, np.asarray(y_train_pred_trans, dtype=float)
         )
         test_metrics_trans = evaluator.calculate_metrics(
-            y_test_trans, y_test_pred_trans
+            y_test_trans, np.asarray(y_test_pred_trans, dtype=float)
         )
         train_regime_metrics = evaluator.calculate_regime_metrics(
             y_true=y_train_report_full,
@@ -810,6 +913,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                         f"n={worst_group['n_samples']})"
                     )
 
+        overfitting_summary = make_overfitting_summary(
+            train_metrics,
+            test_metrics,
+            train_metrics_trans,
+            test_metrics_trans,
+        )
+
         # Log transformed space metrics (REFERENCE)
         training_space_label = format_training_space_label(
             target_column,
@@ -823,13 +933,14 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(
             f"Test RMSE ({training_space_label}): {test_metrics_trans['rmse']:.4f}"
         )
+        training_space_ratio = overfitting_summary["rmse_ratio_transformed"]
         logger.info(
             f"Train/Test ratio ({training_space_label}): "
-            f"{test_metrics_trans['rmse'] / train_metrics_trans['rmse']:.2f}"
+            f"{training_space_ratio:.2f}"
         )
 
         # Check for overfitting (using original space metrics)
-        rmse_ratio = test_metrics["rmse"] / train_metrics["rmse"]
+        rmse_ratio = overfitting_summary["rmse_ratio_original"]
         if rmse_ratio > 1.2:
             logger.warning(
                 f"Potential overfitting detected! Test RMSE is {rmse_ratio:.2f}x training RMSE"
@@ -876,35 +987,33 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         # Step 8: Save model and artifacts
         logger.info("\nStep 8: Saving model and artifacts...")
 
-        # Save model with metadata
+        common_artifact_payload = make_common_artifact_payload(
+            context_hash=context_hash,
+            params_source=params_source,
+            final_model_params=trainer.params.copy(),
+            optuna_run_info=optuna_run_info,
+            optuna_metric_space=optuna_metric_space,
+            cv_metric_space=cv_metric_space,
+            selection_objective=trainer.selection_objective,
+            target_metadata=target_metadata,
+            split_strategy=split_strategy,
+            effective_split_strategy=effective_split_strategy,
+            stratification_metadata=stratification_metadata,
+            cv_results=cv_results,
+            train_metrics=train_metrics,
+            test_metrics=test_metrics,
+            train_metrics_trans=train_metrics_trans,
+            test_metrics_trans=test_metrics_trans,
+            regime_schema=regime_schema,
+            train_regime_metrics=train_regime_metrics,
+            test_regime_metrics=test_regime_metrics,
+            final_n_estimators=final_n_estimators,
+            fold_best_iterations=fold_best_iterations,
+        )
         metadata = {
             "config": config,
-            "context_hash": context_hash,
             "training_context": training_context,
-            "params_source": params_source,
-            "final_model_params": trainer.params.copy(),
-            "optuna_run_info": optuna_run_info,
-            "optuna_metric_space": optuna_metric_space,
-            "cv_metric_space": cv_metric_space,
-            "selection_objective": trainer.selection_objective,
-            **target_metadata,
-            "split_strategy_requested": split_strategy,
-            "split_strategy_effective": effective_split_strategy,
-            "stratification_metadata": stratification_metadata,
-            "selection_metrics_cv": {
-                "composite_objective": cv_results["mean_cv_score"],
-                "rmse": cv_results.get("mean_cv_rmse"),
-                "r2": cv_results.get("mean_cv_r2"),
-                "cov": cv_results.get("mean_cv_cov"),
-            },
-            "train_metrics_original_space": train_metrics,  # LEGACY
-            "train_full_apparent_metrics_original_space": train_metrics,  # PRIMARY
-            "test_metrics_original_space": test_metrics,  # PRIMARY
-            "train_metrics_transformed_space": train_metrics_trans,  # REFERENCE
-            "test_metrics_transformed_space": test_metrics_trans,  # REFERENCE
-            "regime_schema": regime_schema,
-            "train_regime_metrics_original_space": train_regime_metrics,
-            "test_regime_metrics_original_space": test_regime_metrics,
+            **common_artifact_payload,
             "cross_validation_results": cv_results,
             "feature_names": feature_names,
             "n_train_samples": len(X_train_full),
@@ -913,14 +1022,11 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "test_size": test_size,
             "n_train_fit_samples": len(X_train_full),
             "n_validation_samples": 0,
-            "final_n_estimators_from_cv": final_n_estimators,
-            "fold_best_iterations": fold_best_iterations,
             "training_successful": True,
             "overfitting_check": {
-                "rmse_ratio_original": test_metrics["rmse"] / train_metrics["rmse"],
-                "rmse_ratio_transformed": test_metrics_trans["rmse"]
-                / train_metrics_trans["rmse"],
-                "detected": test_metrics["rmse"] / train_metrics["rmse"] > 1.2,
+                "rmse_ratio_original": overfitting_summary["rmse_ratio_original"],
+                "rmse_ratio_transformed": overfitting_summary["rmse_ratio_transformed"],
+                "detected": overfitting_summary["detected"],
             },
         }
 
@@ -932,76 +1038,26 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             metadata=metadata,
         )
 
-        # Convert cv_results to be JSON serializable
-        serializable_cv_results = {}
-        if isinstance(cv_results, dict):
-            for key, value in cv_results.items():
-                if hasattr(value, "tolist"):  # numpy arrays
-                    serializable_cv_results[key] = value.tolist()
-                elif isinstance(value, dict) and "cv_scores" in str(value):
-                    # Handle nested CV results
-                    serializable_cv_results[key] = {}
-                    for k2, v2 in value.items():
-                        if hasattr(v2, "tolist"):
-                            serializable_cv_results[key][k2] = v2.tolist()
-                        else:
-                            serializable_cv_results[key][k2] = v2
-                else:
-                    serializable_cv_results[key] = value
+        serializable_cv_results = make_serializable_cv_results(cv_results)
 
         eval_report_path = output_path / "evaluation_report.json"
         evaluator.save_evaluation_report(
             {
                 "model_name": "xgboost_model",
                 "timestamp": pd.Timestamp.now().isoformat(),
-                "context_hash": context_hash,
-                "params_source": params_source,
-                "final_model_params": trainer.params.copy(),
-                "optuna_run_info": optuna_run_info,
-                "optuna_metric_space": optuna_metric_space,
-                "cv_metric_space": cv_metric_space,
-                "selection_objective": trainer.selection_objective,
-                **target_metadata,
-                "split_strategy_requested": split_strategy,
-                "split_strategy_effective": effective_split_strategy,
-                "stratification_metadata": stratification_metadata,
-                "selection_metrics_cv": {
-                    "composite_objective": cv_results["mean_cv_score"],
-                    "rmse": cv_results.get("mean_cv_rmse"),
-                    "r2": cv_results.get("mean_cv_r2"),
-                    "cov": cv_results.get("mean_cv_cov"),
-                },
-                "train_metrics_original_space": train_metrics,  # LEGACY
-                "train_full_apparent_metrics_original_space": train_metrics,  # PRIMARY
-                "test_metrics_original_space": test_metrics,  # PRIMARY
-                "train_metrics_transformed_space": train_metrics_trans,  # REFERENCE
-                "test_metrics_transformed_space": test_metrics_trans,  # REFERENCE
-                "regime_schema": regime_schema,
-                "train_regime_metrics_original_space": train_regime_metrics,
-                "test_regime_metrics_original_space": test_regime_metrics,
+                **common_artifact_payload,
                 "cv_results": serializable_cv_results,
-                "data_split": {
-                    "n_train": len(X_train_full),
-                    "n_test": len(X_test),
-                    "test_size": test_size,
-                    "n_train_fit": len(X_train_full),
-                    "n_validation": 0,
-                    "n_strata_train": int(train_strata_full.nunique())
-                    if train_strata_full is not None
-                    else None,
-                    "n_strata_test": int(test_strata.nunique())
-                    if test_strata is not None
-                    else None,
-                },
-                "final_n_estimators_from_cv": final_n_estimators,
-                "fold_best_iterations": fold_best_iterations,
+                "data_split": make_data_split_summary(
+                    X_train_full,
+                    X_test,
+                    test_size,
+                    train_strata_full,
+                    test_strata,
+                ),
                 "overfitting_analysis": {
-                    "rmse_ratio_original": test_metrics["rmse"] / train_metrics["rmse"],
-                    "rmse_ratio_transformed": test_metrics_trans["rmse"]
-                    / train_metrics_trans["rmse"],
-                    "status": "overfitting"
-                    if test_metrics["rmse"] / train_metrics["rmse"] > 1.2
-                    else "healthy",
+                    "rmse_ratio_original": overfitting_summary["rmse_ratio_original"],
+                    "rmse_ratio_transformed": overfitting_summary["rmse_ratio_transformed"],
+                    "status": overfitting_summary["status"],
                 },
             },
             str(eval_report_path),
@@ -1048,7 +1104,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         logger.info(f"")
         logger.info(f"Overfitting Analysis:")
-        rmse_ratio_final = test_metrics["rmse"] / train_metrics["rmse"]
+        rmse_ratio_final = float(overfitting_summary["rmse_ratio_original"])
         status = "OVERFIT" if rmse_ratio_final > 1.2 else "OK"
         logger.info(f"  Ratio: {rmse_ratio_final:.2f} ({status})")
         if test_regime_metrics:
@@ -1056,9 +1112,12 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             for regime_name, regime_result in test_regime_metrics.items():
                 worst_group = regime_result.get("worst_rmse_group")
                 if worst_group:
+                    worst_rmse = worst_group['metrics'].get('rmse')
+                    if worst_rmse is None:
+                        continue
                     logger.info(
                         f"  {regime_name}: {worst_group['label']} "
-                        f"(RMSE={worst_group['metrics']['rmse']:.4f} kN)"
+                        f"(RMSE={worst_rmse:.4f} kN)"
                     )
         logger.info("=" * 80)
 

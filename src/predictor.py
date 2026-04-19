@@ -10,11 +10,7 @@ import numpy as np
 from typing import Union, List, Any, Optional, Dict, cast
 from pathlib import Path
 
-from src.domain_features import (
-    REPORT_TARGET_COLUMN_DEFAULT,
-    normalize_target_mode,
-    restore_report_target,
-)
+from src.domain_features import NPL_COLUMN, normalize_target_mode, restore_report_target
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -107,29 +103,31 @@ class Predictor:
         logger.info(f"Making predictions on {len(X)} samples")
 
         try:
-            X_processed = X.copy()
-            X_reference = X_processed.copy()
+            self._validate_input_data(X)
 
-            # Validate input
-            self._validate_input_data(X_processed)
-
-            # Filter to expected features if specified
+            X_processed = X[self.feature_names] if self.feature_names else X
             if self.feature_names:
-                X_processed = X_processed[self.feature_names]
                 logger.debug(f"Filtered to {len(self.feature_names)} features")
 
-            # Apply preprocessor if available
+            reference_features: Optional[pd.DataFrame] = None
+            reference_scale: Optional[np.ndarray] = None
+            if self._get_target_mode() != "raw":
+                if NPL_COLUMN in X.columns:
+                    reference_scale = X[NPL_COLUMN].to_numpy(dtype=float)
+                else:
+                    reference_features = X
+
             if self.preprocessor is not None:
                 logger.debug("Applying preprocessor transformation")
                 X_processed = self.preprocessor.transform(X_processed)
 
-            # Make predictions
             predictions = self.model.predict(X_processed)
             predictions = restore_report_target(
                 predictions,
                 target_mode=self._get_target_mode(),
                 target_transform_type=self._get_target_transform_type(),
-                reference_features=X_reference,
+                reference_features=reference_features,
+                reference_scale=reference_scale,
             )
 
             logger.info(f"Predictions completed: {len(predictions)} samples")
@@ -137,10 +135,9 @@ class Predictor:
 
             return predictions
 
-        except Exception as e:
-            error_msg = f"Prediction failed: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        except Exception as exc:
+            logger.error("Prediction failed: %s", exc)
+            raise
 
     def _get_target_mode(self) -> str:
         target_transform = self.metadata.get("target_transform", {})
@@ -150,15 +147,6 @@ class Predictor:
     def _get_target_transform_type(self) -> Optional[str]:
         target_transform = self.metadata.get("target_transform", {})
         return target_transform.get("type") if target_transform.get("enabled") else None
-
-    def _get_report_target_column(self) -> str:
-        target_transform = self.metadata.get("target_transform", {})
-        return str(
-            self.metadata.get(
-                "report_target_column",
-                target_transform.get("original_column", REPORT_TARGET_COLUMN_DEFAULT),
-            )
-        )
 
     def predict_single(self, data: Union[pd.DataFrame, Dict[str, Any]]) -> float:
         """
@@ -176,29 +164,22 @@ class Predictor:
         logger.debug("Making single prediction")
 
         try:
-            # Convert dictionary to DataFrame if needed
             if isinstance(data, dict):
                 data = pd.DataFrame([data])
 
-            # Ensure single row
             if len(data) != 1:
                 error_msg = f"Single prediction expects 1 row, got {len(data)}"
                 logger.error(error_msg)
                 raise ValueError(error_msg)
 
-            # Make prediction
             predictions = self.predict(data)
-
-            # Return single value
             prediction = float(predictions[0])
             logger.info(f"Single prediction: {prediction:.4f}")
-
             return prediction
 
-        except Exception as e:
-            error_msg = f"Single prediction failed: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        except Exception as exc:
+            logger.error("Single prediction failed: %s", exc)
+            raise
 
     def predict_batch(self, X: pd.DataFrame, batch_size: Optional[int] = None) -> np.ndarray:
         """
@@ -284,11 +265,8 @@ class Predictor:
         logger.info("Getting feature contributions")
 
         try:
-            # Validate input
             self._validate_input_data(X)
 
-            # For now, return the feature values themselves
-            # In the future, this would calculate SHAP values
             if self.feature_names:
                 contributions = cast(pd.DataFrame, X[self.feature_names].copy())
             else:
@@ -297,10 +275,9 @@ class Predictor:
             logger.info(f"Feature contributions calculated for {len(X)} samples")
             return contributions
 
-        except Exception as e:
-            error_msg = f"Failed to get feature contributions: {str(e)}"
-            logger.error(error_msg)
-            raise Exception(error_msg)
+        except Exception as exc:
+            logger.error("Failed to get feature contributions: %s", exc)
+            raise
 
 
 def export_predictions(X: pd.DataFrame, predictions: Union[np.ndarray, List[float]],
@@ -343,10 +320,9 @@ def export_predictions(X: pd.DataFrame, predictions: Union[np.ndarray, List[floa
             f"Max: {prediction_array.max():.4f}, Mean: {prediction_array.mean():.4f}"
         )
 
-    except Exception as e:
-        error_msg = f"Failed to export predictions: {str(e)}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
+    except Exception as exc:
+        logger.error("Failed to export predictions: %s", exc)
+        raise
 
 
 def load_predictions_and_features(prediction_path: str) -> pd.DataFrame:
@@ -369,10 +345,9 @@ def load_predictions_and_features(prediction_path: str) -> pd.DataFrame:
         logger.info(f"Predictions loaded: {len(df)} rows, {len(df.columns)} columns")
         return df
 
-    except Exception as e:
-        error_msg = f"Failed to load predictions: {str(e)}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
+    except Exception as exc:
+        logger.error("Failed to load predictions: %s", exc)
+        raise
 
 
 def compare_predictions(actual_path: str, prediction_path: str,
@@ -427,7 +402,6 @@ def compare_predictions(actual_path: str, prediction_path: str,
 
         return comparison_df
 
-    except Exception as e:
-        error_msg = f"Failed to compare predictions: {str(e)}"
-        logger.error(error_msg)
-        raise Exception(error_msg)
+    except Exception as exc:
+        logger.error("Failed to compare predictions: %s", exc)
+        raise

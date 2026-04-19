@@ -7,20 +7,16 @@ This module handles XGBoost model training, cross-validation, and hyperparameter
 import xgboost as xgb
 import numpy as np
 import pandas as pd
-from typing import Dict, Tuple, Optional, List, Any, Protocol, Union, cast
+from typing import Dict, Tuple, Optional, List, Any, Protocol, cast
 from sklearn.model_selection import KFold, train_test_split
-from sklearn.metrics import mean_squared_error, r2_score
 from optuna.trial import Trial
 import time
 import json
 import os
 from pathlib import Path
 
-from src.domain_features import (
-    inverse_target_transform,
-    normalize_target_mode,
-    restore_report_target,
-)
+from src.domain_features import normalize_target_mode, restore_report_target
+from src.evaluator import calculate_regression_metrics as _calculate_regression_metrics
 from src.utils.logger import get_logger
 from src.utils.model_utils import load_best_params, save_best_params
 from src.preprocessor import Preprocessor
@@ -64,24 +60,6 @@ def _normalize_metric_space(metric_space: Optional[str]) -> str:
     return normalized
 
 
-def _negative_rmse_score(
-    y_true: Union[pd.Series, np.ndarray],
-    y_pred: Union[pd.Series, np.ndarray],
-    metric_space: str = "transformed",
-    target_transform_type: Optional[str] = None,
-) -> float:
-    """Return negative RMSE so sklearn/Optuna can maximize the scorer."""
-    normalized_space = _normalize_metric_space(metric_space)
-    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
-    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
-
-    if normalized_space == "original":
-        y_true_array = inverse_target_transform(y_true_array, target_transform_type)
-        y_pred_array = inverse_target_transform(y_pred_array, target_transform_type)
-
-    return -float(np.sqrt(mean_squared_error(y_true_array, y_pred_array)))
-
-
 def _build_selection_objective_config(
     raw_config: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
@@ -103,51 +81,6 @@ def _build_selection_objective_config(
     config["metric_space"] = metric_space
     config["rmse_normalizer"] = rmse_normalizer
     return config
-
-
-def _calculate_cov_statistics(
-    y_true: Union[pd.Series, np.ndarray],
-    y_pred: Union[pd.Series, np.ndarray],
-) -> Dict[str, Optional[float]]:
-    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
-    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
-    ratios = y_pred_array / y_true_array
-    valid_mask = np.isfinite(ratios) & (y_true_array != 0)
-    valid_ratios = ratios[valid_mask]
-    if len(valid_ratios) == 0:
-        return {"cov": None, "mean_ratio": None, "std_ratio": None}
-
-    mean_ratio = float(np.mean(valid_ratios))
-    std_ratio = float(np.std(valid_ratios, ddof=1)) if len(valid_ratios) > 1 else 0.0
-    cov = std_ratio / mean_ratio if mean_ratio != 0 else None
-    return {
-        "cov": float(cov) if cov is not None else None,
-        "mean_ratio": mean_ratio,
-        "std_ratio": std_ratio,
-    }
-
-
-def _calculate_regression_metrics(
-    y_true: Union[pd.Series, np.ndarray],
-    y_pred: Union[pd.Series, np.ndarray],
-) -> Dict[str, Optional[float]]:
-    y_true_array = np.asarray(y_true, dtype=float).reshape(-1)
-    y_pred_array = np.asarray(y_pred, dtype=float).reshape(-1)
-
-    rmse = float(np.sqrt(mean_squared_error(y_true_array, y_pred_array)))
-    r2 = float(r2_score(y_true_array, y_pred_array))
-    mae = float(np.mean(np.abs(y_true_array - y_pred_array)))
-    mean_actual = float(np.mean(y_true_array))
-    cov_stats = _calculate_cov_statistics(y_true_array, y_pred_array)
-    return {
-        "rmse": rmse,
-        "r2": r2,
-        "mae": mae,
-        "mean_actual": mean_actual,
-        "cov": cov_stats["cov"],
-        "mean_ratio": cov_stats["mean_ratio"],
-        "std_ratio": cov_stats["std_ratio"],
-    }
 
 
 def _calculate_selection_objective(
@@ -187,19 +120,19 @@ def _calculate_selection_objective(
 
 
 class CrossValidatorProtocol(Protocol):
-    def split(self, X: pd.DataFrame, y: Optional[pd.Series] = None, groups: Any = None) -> Any:
+    def split(self, X: Any, y: Any = None, groups: Any = None) -> Any:
         ...
 
     def get_n_splits(
         self,
-        X: Optional[pd.DataFrame] = None,
-        y: Optional[pd.Series] = None,
+        X: Any = None,
+        y: Any = None,
         groups: Any = None,
     ) -> int:
         ...
 
 
-CrossValidatorLike = Union[int, CrossValidatorProtocol]
+CrossValidatorLike = Any
 
 
 class ModelTrainer:
@@ -513,13 +446,13 @@ class ModelTrainer:
         Run fold-by-fold evaluation using the same fold-internal validation path as final training.
         """
         if isinstance(cv, int) and not isinstance(cv, bool):
-            splitter = KFold(
+            splitter: CrossValidatorProtocol = KFold(
                 n_splits=cv,
                 shuffle=True,
                 random_state=self.params.get("random_state", 42),
             )
         else:
-            splitter = cv
+            splitter = cast(CrossValidatorProtocol, cv)
 
         n_folds = splitter.get_n_splits(X, y, None)
         scoring_space = _normalize_metric_space(metric_space or self.optuna_metric_space)
@@ -604,7 +537,7 @@ class ModelTrainer:
                 score_metrics,
                 self.selection_objective,
             )
-            transformed_rmse = float(np.sqrt(mean_squared_error(y_test_fold, y_pred)))
+            transformed_rmse = float(training_metrics["rmse"]) if training_metrics["rmse"] is not None else np.nan
             fold_scores.append(float(fold_score))
             rmse_value = report_metrics["rmse"]
             r2_value = report_metrics["r2"]
@@ -783,7 +716,11 @@ class ModelTrainer:
                 "Only neg_root_mean_squared_error is supported in the aligned CV path"
             )
 
-        n_folds = cv if isinstance(cv, int) and not isinstance(cv, bool) else cv.get_n_splits(X, y)
+        n_folds = (
+            cv
+            if isinstance(cv, int) and not isinstance(cv, bool)
+            else cast(CrossValidatorProtocol, cv).get_n_splits(X, y)
+        )
         logger.info(f"Starting {n_folds}-fold cross-validation")
         results = self._score_with_consistent_cv(
             params=self.params,
@@ -884,14 +821,14 @@ class ModelTrainer:
 
         context_hash = run_context.get("context_hash") if run_context else None
         data_file = run_context.get("data_file") if run_context else None
-        cv_splitter = (
+        cv_splitter: CrossValidatorProtocol = (
             KFold(
                 n_splits=cv,
                 shuffle=True,
                 random_state=self.params.get("random_state", 42),
             )
             if isinstance(cv, int) and not isinstance(cv, bool)
-            else cv
+            else cast(CrossValidatorProtocol, cv)
         )
         n_folds = (
             cv if isinstance(cv, int) and not isinstance(cv, bool) else cv_splitter.get_n_splits(X, y)

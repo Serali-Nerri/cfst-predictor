@@ -44,7 +44,7 @@ def test_predict_raises_when_required_feature_missing():
     predictor = Predictor(model=StubModel(), feature_names=["a", "b"])
     X = pd.DataFrame({"a": [1.0]})
 
-    with pytest.raises(Exception, match="Missing required features"):
+    with pytest.raises(ValueError, match="Missing required features"):
         predictor.predict(X)
 
 
@@ -52,7 +52,7 @@ def test_predict_single_raises_for_multiple_rows():
     predictor = Predictor(model=StubModel(), feature_names=["a", "b"])
     X = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
 
-    with pytest.raises(Exception, match="Single prediction expects 1 row"):
+    with pytest.raises(ValueError, match="Single prediction expects 1 row"):
         predictor.predict_single(X)
 
 
@@ -112,5 +112,5 @@ def test_compare_predictions_rejects_row_count_mismatch(tmp_path):
     pd.DataFrame({"actual": [1.0, 2.0, 3.0]}).to_csv(actual_path, index=False)
     pd.DataFrame({"prediction": [0.9, 1.9]}).to_csv(pred_path, index=False)
 
-    with pytest.raises(Exception, match="same number of rows"):
+    with pytest.raises(ValueError, match="same number of rows"):
         compare_predictions(str(actual_path), str(pred_path))

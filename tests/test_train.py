@@ -1,7 +1,18 @@
+import numpy as np
+import pandas as pd
 import pytest
 from sklearn.model_selection import KFold
 
-from train import build_cv_splitter, get_cv_n_splits, select_final_n_estimators
+from train import (
+    build_cv_splitter,
+    get_cv_n_splits,
+    make_common_artifact_payload,
+    make_data_split_summary,
+    make_overfitting_summary,
+    make_selection_metrics_cv,
+    make_serializable_cv_results,
+    select_final_n_estimators,
+)
 
 
 def test_build_cv_splitter_uses_config_values():
@@ -56,3 +67,82 @@ def test_select_final_n_estimators_uses_median_best_iteration_plus_one():
 
     assert final_n_estimators == 12
     assert fold_best_iterations == [10, 12, 14]
+
+
+def test_make_selection_metrics_cv_returns_expected_keys():
+    result = make_selection_metrics_cv(
+        {"mean_cv_score": 1.2, "mean_cv_rmse": 3.4, "mean_cv_r2": 0.95, "mean_cv_cov": 0.08}
+    )
+
+    assert result == {"composite_objective": 1.2, "rmse": 3.4, "r2": 0.95, "cov": 0.08}
+
+
+def test_make_overfitting_summary_reports_status():
+    result = make_overfitting_summary(
+        {"rmse": 10.0},
+        {"rmse": 13.0},
+        {"rmse": 0.2},
+        {"rmse": 0.3},
+    )
+
+    assert result["detected"] is True
+    assert result["status"] == "overfitting"
+    assert result["rmse_ratio_original"] == pytest.approx(1.3)
+
+
+def test_make_data_split_summary_counts_strata():
+    X_train = pd.DataFrame({"a": [1, 2, 3]})
+    X_test = pd.DataFrame({"a": [4, 5]})
+    train_strata = pd.Series(["s1", "s1", "s2"])
+    test_strata = pd.Series(["s1", "s2"])
+
+    result = make_data_split_summary(X_train, X_test, 0.4, train_strata, test_strata)
+
+    assert result["n_train"] == 3
+    assert result["n_test"] == 2
+    assert result["n_strata_train"] == 2
+    assert result["n_strata_test"] == 2
+
+
+def test_make_serializable_cv_results_handles_numpy_arrays():
+    result = make_serializable_cv_results(
+        {"cv_scores": np.array([1.0, 2.0]), "nested": {"values": np.array([3.0, 4.0])}}
+    )
+
+    assert result == {"cv_scores": [1.0, 2.0], "nested": {"values": [3.0, 4.0]}}
+
+
+def test_make_common_artifact_payload_includes_shared_sections():
+    result = make_common_artifact_payload(
+        context_hash="abc123",
+        params_source="config",
+        final_model_params={"max_depth": 5},
+        optuna_run_info=None,
+        optuna_metric_space="original",
+        cv_metric_space="transformed",
+        selection_objective={"metric_space": "original_nexp"},
+        target_metadata={"target_mode": "raw"},
+        split_strategy="random",
+        effective_split_strategy="random",
+        stratification_metadata={"strategy": "random"},
+        cv_results={"mean_cv_score": 1.0, "mean_cv_rmse": 2.0, "mean_cv_r2": 0.9, "mean_cv_cov": 0.1},
+        train_metrics={"rmse": 1.0},
+        test_metrics={"rmse": 2.0},
+        train_metrics_trans={"rmse": 0.1},
+        test_metrics_trans={"rmse": 0.2},
+        regime_schema={},
+        train_regime_metrics={},
+        test_regime_metrics={},
+        final_n_estimators=123,
+        fold_best_iterations=[100, 120],
+    )
+
+    assert result["context_hash"] == "abc123"
+    assert result["selection_metrics_cv"] == {
+        "composite_objective": 1.0,
+        "rmse": 2.0,
+        "r2": 0.9,
+        "cov": 0.1,
+    }
+    assert result["final_n_estimators_from_cv"] == 123
+    assert result["fold_best_iterations"] == [100, 120]
