@@ -18,11 +18,12 @@
 
 当前默认主线已经切换为：
 
-- `target_mode: r_over_npl`
-- `target_transform.enabled: false`
+- `target_mode: eta_u_over_npl`
+- `target_transform.enabled: true`
+- `target_transform.type: log`
 - `model.keml.enabled: true`
-- `model.n_trials: 200`
-- 默认输出目录：`output/psi_over_npl_log_original_final_noopt`
+- `model.n_trials: 100`
+- 默认输出目录：`output/eta_u_over_npl_log_original_default_optuna100`
 
 ## 当前实现的核心特性
 
@@ -116,11 +117,12 @@ python train.py --config config/config.yaml
 
 以上命令会直接运行当前默认主线：
 
-- `target_mode: r_over_npl`
-- `target_transform.enabled: false`
+- `target_mode: eta_u_over_npl`
+- `target_transform.enabled: true`
+- `target_transform.type: log`
 - `model.keml.enabled: true`
-- `n_trials: 200`
-- 默认输出目录：`output/psi_over_npl_log_original_final_noopt`
+- `n_trials: 100`
+- 默认输出目录：`output/eta_u_over_npl_log_original_default_optuna100`
 
 指定输出目录：
 
@@ -142,10 +144,10 @@ python train.py --config config/config.yaml --output output/xgboost_model
 data:
   file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
-  target_mode: "r_over_npl"
+  target_mode: "eta_u_over_npl"
   target_transform:
-    enabled: false
-    type: null
+    enabled: true
+    type: "log"
   columns_to_drop:
     - "b (mm)"
     - "h (mm)"
@@ -172,10 +174,11 @@ model:
     tree_method: "hist"
     device: "cpu"
     n_jobs: -1
-  use_optuna: false
-  n_trials: 200
+  use_optuna: true
+  n_trials: 100
   optuna_timeout: 14400
-  best_params_path: "logs/best_params_psi_over_npl_log_original_200.json"
+  optuna_storage_url: "sqlite:///logs/optuna_study.db"
+  best_params_path: "logs/best_params.json"
   early_stopping_rounds: 100
   eval_metric: "rmse"
   validation_size: 0.15
@@ -197,8 +200,8 @@ cv:
 
 - 当前代码强制要求 XGBoost 参数定义在 `config.model.params`。
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
-- `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线关闭该变换。
-- 当前默认主线是 `target_mode: r_over_npl + target_transform.enabled: false + model.keml.enabled: true`。
+- `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
+- 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
 - `config.cv` 会同时控制 `Optuna` 调参和训练阶段输出的交叉验证报告；`cv.n_splits` 控制折数，`cv.shuffle` 与 `cv.random_state` 控制折分复现性。
 - `selection_objective` 会在原始 `Nexp` 空间综合考虑 `RMSE / R² / COV`，而不是只按单一 RMSE 选模。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
@@ -212,10 +215,10 @@ cv:
 python train.py --config config/config.yaml
 ```
 
-则当前代码会在 `output/psi_over_npl_log_original_final_noopt/` 下生成类似产物：
+则当前代码会在 `output/eta_u_over_npl_log_original_default_optuna100/` 下生成类似产物：
 
 ```text
-output/psi_over_npl_log_original_final_noopt/
+output/eta_u_over_npl_log_original_default_optuna100/
 ├── xgboost_model.pkl
 ├── preprocessor.pkl
 ├── feature_names.json
@@ -267,7 +270,7 @@ output/psi_over_npl_log_original_final_noopt/
 ### 批量预测
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_final_noopt --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv
+python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv
 ```
 
 参数说明：
@@ -283,7 +286,7 @@ python predict.py --model output/psi_over_npl_log_original_final_noopt --input d
 当前实现不是交互式输入，而是：
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_final_noopt --input data/processed/one_row_feature_parameters_raw.csv --single
+python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/one_row_feature_parameters_raw.csv --single
 ```
 
 在 `--single` 模式下：
@@ -323,7 +326,7 @@ python train.py --config config/config.yaml
 当 `use_optuna: true` 时，会：
 
 1. 在训练数据上进行调参
-2. 将最优参数保存到 `best_params_path` 指向的 JSON 文件（默认主线当前未启用 `use_optuna`）
+2. 将最优参数保存到 `best_params_path` 指向的 JSON 文件
 3. 在同一轮训练中使用最优参数重训最终模型
 
 ## 已知限制
@@ -341,15 +344,15 @@ python train.py --config config/config.yaml
 
 如果输入里缺少 `Npl (kN)`，推理脚本无法完成 `eta_u/r -> Nexp` 的恢复。
 
-### 2. 非默认目标变换不属于当前主线
+### 2. 非默认目标变换路径未作为当前主线验证
 
-当前仓库只保留 `log` 目标变换路径；默认主线仍然关闭目标变换。
+当前仓库只保留 `log` 目标变换路径，且默认主线已经启用该变换。
 
 因此：
 
-- 默认实验当前使用 `target_mode: r_over_npl`
-- 默认训练变换当前关闭，即 `target_transform.enabled: false`
-- 如需重新启用 `log` 变换，应先补充额外验证
+- 默认实验当前使用 `target_mode: eta_u_over_npl`
+- 默认训练变换当前使用 `target_transform.enabled: true` 与 `target_transform.type: log`
+- 如需引入其他目标变换类型，应先补充额外验证
 
 ### 3. 当前 CV 结果更适合作为调参参考，不宜直接作为无偏论文结论
 

@@ -1,21 +1,22 @@
 {
-  "trial_number": 372,
-  "best_rmse": 0.10733223060601768,
+  "trial_number": 42,
+  "best_composite_objective": 2.3410564229363398,
+  "best_score": 2.3410564229363398,
   "parameters": {
-    "max_depth": 6,
-    "learning_rate": 0.04411666122575092,
-    "n_estimators": 4066,
-    "subsample": 0.7038011848542036,
-    "colsample_bytree": 0.4714919226150699,
-    "min_child_weight": 6,
-    "reg_alpha": 0.033505711876129954,
-    "reg_lambda": 0.1408673338811182,
-    "gamma": 0.00020676219564729034
+    "max_depth": 7,
+    "learning_rate": 0.04289671882985265,
+    "n_estimators": 2604,
+    "subsample": 0.6472647632162094,
+    "colsample_bytree": 0.40280752545038945,
+    "min_child_weight": 8,
+    "reg_alpha": 0.022518545683829657,
+    "reg_lambda": 3.6511070610669933,
+    "gamma": 0.00016671780836919486
   },
-  "timestamp": "2026-03-09T18:35:04.193044",
-  "n_trials_total": 400,
-  "context_hash": "986fdf8b6eb2",
-  "data_file": "/home/thelya/Work/work/xgboost/data/processed/2026.3.9-11864_feature_parameters_raw.csv",
-  "study_name": "xgboost_optimization__2026_3_9_11864_feature_parameters_raw__986fdf8b6eb2__a2fc5da2c7",
+  "timestamp": "2026-04-20T17:36:54.799374",
+  "n_trials_total": 100,
+  "context_hash": "aa407a7072ec",
+  "data_file": "/home/thelya/Work/CFST_Alchemy_Lab/cfst_predictitor/data/processed/final_feature_parameters_raw.csv",
+  "study_name": "xgboost_optimization__final_feature_parameters_raw__aa407a7072ec__0049c12e5a",
   "storage_url": "sqlite:///logs/optuna_study.db"
 }

@@ -1,13 +1,13 @@
-# log(psi)-space training + original-Nexp selection metric
+# log(eta_u)-space training + original-Nexp selection metric
 
 data:
   file_path: "data/processed/final_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
-  target_mode: "r_over_npl"
+  target_mode: "eta_u_over_npl"
 
   target_transform:
-    enabled: false
-    type: null
+    enabled: true
+    type: "log"
 
   columns_to_drop:
     - "b (mm)"
@@ -45,13 +45,13 @@ model:
     device: "cpu"
     n_jobs: -1
 
-  use_optuna: false
+  use_optuna: true
   optuna_metric_space: "original"
   cv_metric_space: "original"
-  n_trials: 200
+  n_trials: 100
   optuna_timeout: 14400
   optuna_storage_url: "sqlite:///logs/optuna_study.db"
-  best_params_path: "logs/best_params_psi_over_npl_log_original_200.json"
+  best_params_path: "logs/best_params.json"
 
   early_stopping_rounds: 100
   eval_metric: "rmse"
@@ -123,7 +123,7 @@ evaluation:
         bins: 4
 
 paths:
-  output_dir: "output/psi_over_npl_log_original_final_noopt"
+  output_dir: "output/eta_u_over_npl_log_original_default_optuna100"
   model_dir: "models"
   model_output: "xgboost_model.pkl"
   preprocessor_output: "preprocessor.pkl"

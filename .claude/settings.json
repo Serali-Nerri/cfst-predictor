@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "mcp__bs__brave_web_search"
+      "mcp__bs__brave_web_search",
+      "Read",
+      "Glob",
+      "Grep",
+      "LSP"
     ]
   }
 }
