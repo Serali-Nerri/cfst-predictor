@@ -33,6 +33,9 @@ VALID_REGIME_SORT_METRICS = {
     "rmse",
     "mae",
     "r2",
+    "mape",
+    "a20_index",
+    "mu",
     "cov",
     "mean_ratio",
     "std_ratio",
@@ -40,7 +43,7 @@ VALID_REGIME_SORT_METRICS = {
 }
 
 
-def _calculate_cov_statistics(
+def _calculate_ratio_statistics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> Dict[str, Optional[float]]:
@@ -48,15 +51,24 @@ def _calculate_cov_statistics(
     valid_mask = np.isfinite(ratios) & (y_true != 0)
     valid_ratios = ratios[valid_mask]
     if len(valid_ratios) == 0:
-        return {"cov": None, "mean_ratio": None, "std_ratio": None}
+        return {
+            "mu": None,
+            "cov": None,
+            "mean_ratio": None,
+            "std_ratio": None,
+            "a20_index": None,
+        }
 
-    mean_ratio = float(np.mean(valid_ratios))
+    mu = float(np.mean(valid_ratios))
     std_ratio = float(np.std(valid_ratios, ddof=1)) if len(valid_ratios) > 1 else 0.0
-    cov = std_ratio / mean_ratio if mean_ratio != 0 else None
+    cov = std_ratio / mu if mu != 0 else None
+    a20_index = float(np.mean((valid_ratios >= 0.8) & (valid_ratios <= 1.2)))
     return {
+        "mu": mu,
         "cov": float(cov) if cov is not None else None,
-        "mean_ratio": mean_ratio,
+        "mean_ratio": mu,
         "std_ratio": std_ratio,
+        "a20_index": a20_index,
     }
 
 
@@ -81,7 +93,7 @@ def calculate_regression_metrics(
         if non_zero_mask.any()
         else None
     )
-    cov_stats = _calculate_cov_statistics(y_true_array, y_pred_array)
+    ratio_stats = _calculate_ratio_statistics(y_true_array, y_pred_array)
     return {
         "rmse": rmse,
         "mae": mae,
@@ -91,9 +103,11 @@ def calculate_regression_metrics(
         "max_error": max_error,
         "mean_prediction": mean_pred,
         "mean_actual": mean_true,
-        "cov": cov_stats["cov"],
-        "mean_ratio": cov_stats["mean_ratio"],
-        "std_ratio": cov_stats["std_ratio"],
+        "mu": ratio_stats["mu"],
+        "cov": ratio_stats["cov"],
+        "mean_ratio": ratio_stats["mean_ratio"],
+        "std_ratio": ratio_stats["std_ratio"],
+        "a20_index": ratio_stats["a20_index"],
         "n_samples": len(y_true_array),
     }
 
@@ -181,12 +195,13 @@ class Evaluator:
             logger.warning("Cannot calculate MAPE: all true values are zero")
         else:
             logger.info(f"MAPE: {metrics['mape']:.2f}%")
-        logger.info(f"Max Error: {metrics['max_error']:.4f}")
+        if metrics["mu"] is not None:
+            logger.info(f"μ: {metrics['mu']:.4f}")
         if metrics["cov"] is not None:
-            logger.info(
-                f"COV: {metrics['cov']:.4f} "
-                f"(μ={metrics['mean_ratio']:.4f}, σ={metrics['std_ratio']:.4f})"
-            )
+            logger.info(f"COV: {metrics['cov']:.4f}")
+        if metrics["a20_index"] is not None:
+            logger.info(f"a20-index: {metrics['a20_index']:.4f}")
+        logger.info(f"Max Error: {metrics['max_error']:.4f}")
 
         return metrics
 
@@ -531,7 +546,9 @@ class Evaluator:
                 'MAE': metrics.get('mae'),
                 'R²': metrics.get('r2'),
                 'MAPE': metrics.get('mape'),
+                'μ': metrics.get('mu'),
                 'COV': metrics.get('cov'),
+                'a20-index': metrics.get('a20_index'),
                 'Samples': metrics.get('n_samples')
             })
 

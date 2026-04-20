@@ -1,5 +1,6 @@
 import sys
 import types
+from typing import Any, ClassVar, cast
 
 import numpy as np
 import pandas as pd
@@ -77,9 +78,9 @@ class ConstantLinearModel:
 
 
 class RecordingRegressor:
-    last_init_kwargs = None
-    last_fit_kwargs = None
-    last_fit_target = None
+    last_init_kwargs: ClassVar[dict[str, Any] | None] = None
+    last_fit_kwargs: ClassVar[dict[str, Any] | None] = None
+    last_fit_target: ClassVar[np.ndarray[Any, Any] | None] = None
 
     def __init__(self, **kwargs):
         type(self).last_init_kwargs = dict(kwargs)
@@ -137,7 +138,7 @@ def test_fit_model_preserves_eval_settings_for_keml_branch(monkeypatch):
     eval_set = RecordingRegressor.last_fit_kwargs["eval_set"]
     assert isinstance(eval_set, list)
     assert len(eval_set) == 1
-    eval_X, eval_y = eval_set[0]
+    eval_X, eval_y = cast(tuple[pd.DataFrame, pd.Series], eval_set[0])
     assert eval_X.equals(X_val)
     assert np.asarray(eval_y, dtype=float).shape == (2,)
     assert RecordingRegressor.last_fit_target is not None

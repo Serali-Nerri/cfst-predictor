@@ -305,9 +305,19 @@ def make_selection_metrics_cv(cv_results: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "composite_objective": cv_results["mean_cv_score"],
         "rmse": cv_results.get("mean_cv_rmse"),
+        "mae": cv_results.get("mean_cv_mae"),
         "r2": cv_results.get("mean_cv_r2"),
+        "mape": cv_results.get("mean_cv_mape"),
+        "mu": cv_results.get("mean_cv_mu"),
         "cov": cv_results.get("mean_cv_cov"),
+        "a20_index": cv_results.get("mean_cv_a20_index"),
     }
+
+
+def _format_metric(value: Any, precision: int = 4, suffix: str = "") -> str:
+    if value is None:
+        return "N/A"
+    return f"{float(value):.{precision}f}{suffix}"
 
 
 def make_overfitting_summary(
@@ -915,19 +925,27 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"  RMSE: {train_metrics['rmse']:.4f} kN")
         logger.info(f"  MAE: {train_metrics['mae']:.4f} kN")
         logger.info(f"  R²: {train_metrics['r2']:.4f}")
-        if train_metrics.get("mape"):
+        if train_metrics.get("mape") is not None:
             logger.info(f"  MAPE: {train_metrics['mape']:.2f}%")
-        if train_metrics.get("cov"):
+        if train_metrics.get("mu") is not None:
+            logger.info(f"  μ: {train_metrics['mu']:.4f}")
+        if train_metrics.get("cov") is not None:
             logger.info(f"  COV: {train_metrics['cov']:.4f}")
+        if train_metrics.get("a20_index") is not None:
+            logger.info(f"  a20-index: {train_metrics['a20_index']:.4f}")
 
         logger.info(f"Test set evaluation (original space - TRUE GENERALIZATION):")
         logger.info(f"  RMSE: {test_metrics['rmse']:.4f} kN")
         logger.info(f"  MAE: {test_metrics['mae']:.4f} kN")
         logger.info(f"  R²: {test_metrics['r2']:.4f}")
-        if test_metrics.get("mape"):
+        if test_metrics.get("mape") is not None:
             logger.info(f"  MAPE: {test_metrics['mape']:.2f}%")
-        if test_metrics.get("cov"):
+        if test_metrics.get("mu") is not None:
+            logger.info(f"  μ: {test_metrics['mu']:.4f}")
+        if test_metrics.get("cov") is not None:
             logger.info(f"  COV: {test_metrics['cov']:.4f}")
+        if test_metrics.get("a20_index") is not None:
+            logger.info(f"  a20-index: {test_metrics['a20_index']:.4f}")
         if test_regime_metrics:
             logger.info("Test regime summary:")
             for regime_name, regime_result in test_regime_metrics.items():
@@ -1109,17 +1127,27 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"")
         logger.info(f"Original Space (Primary):")
         logger.info(
-            f"  Training: RMSE={train_metrics['rmse']:.4f} kN, R²={train_metrics['r2']:.4f}, COV={train_metrics.get('cov', 'N/A')}"
+            f"  Training: RMSE={_format_metric(train_metrics['rmse'])} kN, MAE={_format_metric(train_metrics['mae'])} kN, "
+            f"R²={_format_metric(train_metrics['r2'])}, MAPE={_format_metric(train_metrics['mape'], 2, '%')}, "
+            f"μ={_format_metric(train_metrics['mu'])}, COV={_format_metric(train_metrics['cov'])}, "
+            f"a20-index={_format_metric(train_metrics['a20_index'])}"
         )
         logger.info(
-            f"  Test:     RMSE={test_metrics['rmse']:.4f} kN, R²={test_metrics['r2']:.4f}, COV={test_metrics.get('cov', 'N/A')}"
+            f"  Test:     RMSE={_format_metric(test_metrics['rmse'])} kN, MAE={_format_metric(test_metrics['mae'])} kN, "
+            f"R²={_format_metric(test_metrics['r2'])}, MAPE={_format_metric(test_metrics['mape'], 2, '%')}, "
+            f"μ={_format_metric(test_metrics['mu'])}, COV={_format_metric(test_metrics['cov'])}, "
+            f"a20-index={_format_metric(test_metrics['a20_index'])}"
         )
         logger.info(
             "  CV: "
-            f"J={cv_results['mean_cv_score']:.4f}, "
-            f"RMSE={(cv_results.get('mean_cv_rmse') if cv_results.get('mean_cv_rmse') is not None else float('nan')):.4f}, "
-            f"R²={(cv_results.get('mean_cv_r2') if cv_results.get('mean_cv_r2') is not None else float('nan')):.4f}, "
-            f"COV={(cv_results.get('mean_cv_cov') if cv_results.get('mean_cv_cov') is not None else float('nan')):.4f}"
+            f"J={_format_metric(cv_results['mean_cv_score'])}, "
+            f"RMSE={_format_metric(cv_results.get('mean_cv_rmse'))}, "
+            f"MAE={_format_metric(cv_results.get('mean_cv_mae'))}, "
+            f"R²={_format_metric(cv_results.get('mean_cv_r2'))}, "
+            f"MAPE={_format_metric(cv_results.get('mean_cv_mape'), 2, '%')}, "
+            f"μ={_format_metric(cv_results.get('mean_cv_mu'))}, "
+            f"COV={_format_metric(cv_results.get('mean_cv_cov'))}, "
+            f"a20-index={_format_metric(cv_results.get('mean_cv_a20_index'))}"
         )
         logger.info(f"")
         logger.info(f"Training Space (Reference):")

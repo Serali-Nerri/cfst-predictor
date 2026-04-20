@@ -6,6 +6,9 @@
   "extraPaths": [
     "/home/thelya/miniconda3/lib/python3.13/site-packages"
   ],
+  "exclude": [
+    "scripts/filter_nonstandard_titles.py"
+  ],
   "typeCheckingMode": "basic",
   "reportMissingImports": "warning",
   "reportMissingTypeStubs": "none"

@@ -17,6 +17,7 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
+from typing import Optional
 
 import pandas as pd
 
@@ -28,7 +29,7 @@ logger = setup_logger(__name__)
 
 
 def make_predictions(model_dir: str, input_data_path: str,
-                    output_path: str = None, single: bool = False) -> pd.DataFrame:
+                    output_path: Optional[str] = None, single: bool = False) -> pd.DataFrame:
     """
     Make predictions using trained model.
 

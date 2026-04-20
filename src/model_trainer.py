@@ -567,8 +567,12 @@ class ModelTrainer:
 
         fold_scores: List[float] = []
         fold_rmse: List[float] = []
+        fold_mae: List[float] = []
         fold_r2: List[float] = []
+        fold_mape: List[float] = []
+        fold_mu: List[float] = []
         fold_cov: List[float] = []
+        fold_a20_index: List[float] = []
         fold_details: List[Dict[str, Any]] = []
         start_time = time.time()
 
@@ -642,19 +646,30 @@ class ModelTrainer:
             transformed_rmse = float(training_metrics["rmse"]) if training_metrics["rmse"] is not None else np.nan
             fold_scores.append(float(fold_score))
             rmse_value = report_metrics["rmse"]
+            mae_value = report_metrics["mae"]
             r2_value = report_metrics["r2"]
+            mape_value = report_metrics["mape"]
+            mu_value = report_metrics["mu"]
+            a20_value = report_metrics["a20_index"]
             fold_rmse.append(float(rmse_value) if rmse_value is not None else np.nan)
+            fold_mae.append(float(mae_value) if mae_value is not None else np.nan)
             fold_r2.append(float(r2_value) if r2_value is not None else np.nan)
-            if report_metrics["cov"] is not None:
-                fold_cov.append(float(report_metrics["cov"]))
+            fold_mape.append(float(mape_value) if mape_value is not None else np.nan)
+            fold_mu.append(float(mu_value) if mu_value is not None else np.nan)
+            fold_cov.append(float(report_metrics["cov"]) if report_metrics["cov"] is not None else np.nan)
+            fold_a20_index.append(float(a20_value) if a20_value is not None else np.nan)
             fold_details.append(
                 {
                     "fold": fold_index + 1,
                     "selection_score": float(fold_score),
                     "selection_metric_space": scoring_space,
                     "rmse_original_space": float(rmse_value) if rmse_value is not None else None,
+                    "mae_original_space": float(mae_value) if mae_value is not None else None,
                     "r2_original_space": float(r2_value) if r2_value is not None else None,
+                    "mape_original_space": float(mape_value) if mape_value is not None else None,
+                    "mu_original_space": float(mu_value) if mu_value is not None else None,
                     "cov_original_space": report_metrics["cov"],
+                    "a20_index_original_space": float(a20_value) if a20_value is not None else None,
                     "rmse_training_space": transformed_rmse,
                     "r2_training_space": training_metrics["r2"],
                     "cov_training_space": training_metrics["cov"],
@@ -674,12 +689,20 @@ class ModelTrainer:
             "std_cv_score": float(np.std(cv_scores)),
             "max_cv_score": float(np.max(cv_scores)),
             "min_cv_score": float(np.min(cv_scores)),
-            "mean_cv_rmse": float(np.mean(fold_rmse)) if fold_rmse else None,
-            "std_cv_rmse": float(np.std(fold_rmse)) if fold_rmse else None,
-            "mean_cv_r2": float(np.mean(fold_r2)) if fold_r2 else None,
-            "std_cv_r2": float(np.std(fold_r2)) if fold_r2 else None,
-            "mean_cv_cov": float(np.mean(fold_cov)) if fold_cov else None,
-            "std_cv_cov": float(np.std(fold_cov)) if fold_cov else None,
+            "mean_cv_rmse": float(np.nanmean(fold_rmse)) if fold_rmse else None,
+            "std_cv_rmse": float(np.nanstd(fold_rmse)) if fold_rmse else None,
+            "mean_cv_mae": float(np.nanmean(fold_mae)) if fold_mae else None,
+            "std_cv_mae": float(np.nanstd(fold_mae)) if fold_mae else None,
+            "mean_cv_r2": float(np.nanmean(fold_r2)) if fold_r2 else None,
+            "std_cv_r2": float(np.nanstd(fold_r2)) if fold_r2 else None,
+            "mean_cv_mape": float(np.nanmean(fold_mape)) if fold_mape else None,
+            "std_cv_mape": float(np.nanstd(fold_mape)) if fold_mape else None,
+            "mean_cv_mu": float(np.nanmean(fold_mu)) if fold_mu else None,
+            "std_cv_mu": float(np.nanstd(fold_mu)) if fold_mu else None,
+            "mean_cv_cov": float(np.nanmean(fold_cov)) if fold_cov else None,
+            "std_cv_cov": float(np.nanstd(fold_cov)) if fold_cov else None,
+            "mean_cv_a20_index": float(np.nanmean(fold_a20_index)) if fold_a20_index else None,
+            "std_cv_a20_index": float(np.nanstd(fold_a20_index)) if fold_a20_index else None,
             "cv_time": cv_time,
             "n_folds": n_folds,
             "fold_details": fold_details,

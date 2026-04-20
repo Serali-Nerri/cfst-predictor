@@ -34,7 +34,7 @@
 - **可比较的 regime analysis**：先在训练集拟合 regime schema，再对 train/test 共用同一套区间
 - **训练产物保存**：保存模型、预处理器、特征名、训练元数据与评估报告
 
-当前默认主线与 `raw psi` 对照的完整结果见：`doc/raw_psi_vs_log_psi_full_run_20260311.md`。
+数据集字段、几何统一口径与原始数据说明见：`doc/DATA_README.md`。
 
 ## 环境要求
 
@@ -132,8 +132,9 @@ python train.py --config config/config.yaml --output output/xgboost_model
 
 主配置文件为 `config/config.yaml`。
 
-如果你希望查看更完整的参数释义、配置阅读建议与各字段用途说明，请参见：`doc/配置参数说明.md`。
-CFST 字段释义与历史特征筛选说明请参见：`doc/CFST字段与特征说明.md`。
+相关补充文档：
+- CFST 字段、特征与参数计算说明：`doc/CFST字段与特征说明.md`
+- 数据集字段、几何统一口径与原始数据说明：`doc/DATA_README.md`
 
 关键配置项：
 
@@ -194,15 +195,12 @@ cv:
 
 说明：
 
-- 更完整的参数释义文档：`doc/配置参数说明.md`
-- CFST 字段释义与历史特征筛选说明：`doc/CFST字段与特征说明.md`
 - 当前代码强制要求 XGBoost 参数定义在 `config.model.params`。
-- `config.cv` 当前会同时控制两条路径：`Optuna` 调参时使用的交叉验证折分，以及训练阶段输出的交叉验证报告。
-- `cv.n_splits` 控制折数，`cv.shuffle` 控制是否打乱样本，`cv.random_state` 在 `shuffle: true` 时控制折分复现性。
-- `target_mode: eta_u_over_npl` 表示模型学习 `eta_u = Nexp / Npl`，最终仍回到 `Nexp` 空间汇报指标。
-- `target_mode: r_over_npl` 表示模型学习 `r = (Nexp - Npl) / Npl`，最终仍回到 `Nexp` 空间汇报指标。
-- `target_transform` 作用于训练目标，而不是直接作用于报告目标。
+- `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
+- `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线关闭该变换。
 - 当前默认主线是 `target_mode: r_over_npl + target_transform.enabled: false + model.keml.enabled: true`。
+- `config.cv` 会同时控制 `Optuna` 调参和训练阶段输出的交叉验证报告；`cv.n_splits` 控制折数，`cv.shuffle` 与 `cv.random_state` 控制折分复现性。
+- `selection_objective` 会在原始 `Nexp` 空间综合考虑 `RMSE / R² / COV`，而不是只按单一 RMSE 选模。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
 - 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 `logs/best_params_*.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
 

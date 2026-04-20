@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 import pandas as pd
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple, Optional, Dict, Any, Sequence, cast
 from pathlib import Path
 import json
 
@@ -148,7 +148,8 @@ def plot_feature_importance(model: Any, feature_names: List[str],
                        color='#2E86AB', alpha=0.8)
 
         # Customize plot
-        plt.yticks(range(len(feature_importance_df)), feature_importance_df['feature'])
+        feature_labels = [str(value) for value in feature_importance_df['feature'].tolist()]
+        plt.yticks(range(len(feature_importance_df)), feature_labels)
         plt.xlabel('Importance', fontsize=12, fontweight='bold')
         plt.title(title, fontsize=14, fontweight='bold', pad=20)
 
@@ -249,7 +250,7 @@ def print_feature_importance_ranking(model: Any, feature_names: List[str],
 
         logger.info("Feature importance ranking generation completed")
 
-        return importance_df
+        return pd.DataFrame(importance_df)
 
     except Exception as e:
         error_msg = f"Failed to generate feature importance ranking: {str(e)}"

@@ -5,7 +5,7 @@ This module handles data preprocessing including column dropping and data cleani
 """
 
 import pandas as pd
-from typing import List
+from typing import Any, Dict, List, cast
 import numpy as np
 
 from src.utils.logger import get_logger
@@ -112,7 +112,7 @@ class Preprocessor:
             raise ValueError(error_msg)
 
         # Drop columns and return remaining features
-        X_transformed = X[self.remaining_features].copy()
+        X_transformed = cast(pd.DataFrame, X.loc[:, self.remaining_features].copy())
 
         logger.info(f"Transformed data shape: {X_transformed.shape}")
         logger.debug(f"Dropped {len(self.columns_to_drop)} columns: {self.columns_to_drop}")
@@ -169,7 +169,7 @@ class Preprocessor:
         """
         return column in self.columns_to_drop
 
-    def check_missing_values(self, X: pd.DataFrame) -> dict:
+    def check_missing_values(self, X: pd.DataFrame) -> Dict[str, int]:
         """
         Check for missing values in the data.
 
@@ -179,17 +179,17 @@ class Preprocessor:
         Returns:
             Dictionary with column names as keys and missing value counts as values
         """
-        missing_counts = X.isnull().sum()
-        missing_counts = missing_counts[missing_counts > 0]
+        missing_counts = cast(pd.Series, X.isnull().sum())
+        missing_counts = cast(pd.Series, missing_counts[missing_counts > 0])
 
-        if missing_counts.empty:
+        if len(missing_counts) == 0:
             logger.info("No missing values found")
         else:
             logger.warning(f"Found missing values:\n{missing_counts}")
 
-        return missing_counts.to_dict()
+        return {str(key): int(value) for key, value in missing_counts.items()}
 
-    def get_feature_stats(self, X: pd.DataFrame) -> dict:
+    def get_feature_stats(self, X: pd.DataFrame) -> Dict[str, Any]:
         """
         Get basic statistics for the features.
 
@@ -204,7 +204,7 @@ class Preprocessor:
             "n_features": len(X.columns),
             "feature_names": list(X.columns),
             "missing_values": self.check_missing_values(X),
-            "numeric_features": X.select_dtypes(include=[np.number]).columns.tolist(),
+            "numeric_features": cast(pd.DataFrame, X.select_dtypes(include=[np.number])).columns.tolist(),
         }
 
         logger.info(f"Feature stats: {len(X.columns)} features, {len(X)} samples")

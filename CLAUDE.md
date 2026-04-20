@@ -34,5 +34,5 @@
 
 ## Documentation Sync
 - If you change the default training mainline, update `README.md` in the same change.
-- If you change reported baseline metrics or default best-params files, update the relevant report under `doc/`, currently `doc/raw_psi_vs_log_psi_full_run_20260311.md`.
+- If you change reported baseline metrics or default best-params files, update the relevant documentation under `doc/` and `README.md` in the same change.
 - Do not describe `logs/` as disposable output unless `.gitignore` is updated accordingly.
