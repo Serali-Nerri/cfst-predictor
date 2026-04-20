@@ -1,0 +1,8 @@
+rank,feature,importance
+1,e_bar,0.23326467
+2,Re (mm),0.14246473
+3,te (mm),0.13355696
+4,ke,0.13099793
+5,fy (MPa),0.12839901
+6,fc (MPa),0.11730463
+7,lambda_bar,0.114012085

@@ -50,7 +50,7 @@ INPUT_ALIASES = {
     "t (mm)": ("t (mm)",),
     "R (%)": ("R (%)", "R再生骨料取代率(%)"),
     "fy (MPa)": ("fy (MPa)",),
-    "fc (MPa)": ("fc (MPa)",),
+    "fc (MPa)": ("fc (MPa)", "fco (MPa)"),
     "L (mm)": ("L (mm)",),
     "e1 (mm)": ("e1 (mm)",),
     "e2 (mm)": ("e2 (mm)",),
