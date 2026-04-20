@@ -56,11 +56,23 @@ INPUT_ALIASES = {
     "e2 (mm)": ("e2 (mm)",),
     "Nexp (kN)": ("Nexp (kN)",),
     "Group": ("Group",),
+    "Notes": ("Notes",),
 }
-OPTIONAL_INPUT_COLUMNS = {"Nexp (kN)", "Group"}
+OPTIONAL_INPUT_COLUMNS = {"Nexp (kN)", "Group", "Notes"}
 
 STEEL_ELASTIC_MODULUS = 206000.0
 PLACEHOLDER_VALUES = {"", "-", "--", "—", "–", "NA", "N/A", "na", "nan", "NaN"}
+ROUNDED_RECTANGLE_NOTE_MARKERS = (
+    "带圆角",
+    "rounded corner",
+    "rounded corners",
+    "corner radius",
+    "outer corner radius",
+    "rounded rectangle",
+    "rounded rectangular",
+    "rounded square",
+    "rounded-corner",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -105,6 +117,10 @@ def resolve_columns(fieldnames: Sequence[str] | None) -> dict[str, str]:
     return mapping
 
 
+def normalize_numeric_text(value: str) -> str:
+    return value.replace("\u00a0", "").replace("\u2009", "").replace(" ", "")
+
+
 def parse_float(row: dict[str, str], column_name: str, row_number: int) -> float:
     raw_value = row[column_name]
     if raw_value is None:
@@ -114,8 +130,9 @@ def parse_float(row: dict[str, str], column_name: str, row_number: int) -> float
         raise ValueError(
             f"Row {row_number}: missing or placeholder value in column {column_name}"
         )
+    normalized_value = normalize_numeric_text(value)
     try:
-        return float(value)
+        return float(normalized_value)
     except ValueError as exc:
         raise ValueError(
             f"Row {row_number}: cannot parse {column_name} as float: {raw_value!r}"
@@ -128,7 +145,7 @@ def parse_source_row(
     parsed: dict[str, float | str] = {}
     errors: list[str] = []
     for output_name, input_name in column_mapping.items():
-        if output_name == "Group":
+        if output_name in {"Group", "Notes"}:
             raw_value = row[input_name]
             if raw_value is None:
                 continue
@@ -150,6 +167,34 @@ def clamp_radius(radius: float, width: float, height: float) -> float:
     if radius <= 0:
         return 0.0
     return min(radius, min(width, height) / 2.0)
+
+
+def has_rounded_rectangle_note(note: str | None) -> bool:
+    if not note:
+        return False
+    normalized_note = note.lower()
+    return any(marker in normalized_note for marker in ROUNDED_RECTANGLE_NOTE_MARKERS)
+
+
+def normalize_geometry(
+    width: float,
+    height: float,
+    radius: float,
+    group: str | None,
+    note: str | None,
+) -> tuple[float, float, float]:
+    normalized_group = group.strip().upper() if group else None
+    if width < height:
+        width, height = height, width
+
+    if normalized_group == "B":
+        radius = height / 2.0
+    elif normalized_group == "C":
+        radius = height / 2.0
+    elif not has_rounded_rectangle_note(note):
+        radius = 0.0
+
+    return width, height, clamp_radius(radius, width, height)
 
 
 def calculate_ix_weak_axis(width: float, height: float, radius: float) -> float:
@@ -231,6 +276,10 @@ def compute_feature_row(source: dict[str, float | str], row_number: int) -> list
     nexp = float(nexp_raw) if nexp_raw is not None else None
     group_raw = source.get("Group")
     group = str(group_raw) if group_raw is not None else None
+    note_raw = source.get("Notes")
+    note = str(note_raw) if note_raw is not None else None
+
+    b, h, r0 = normalize_geometry(b, h, r0, group, note)
 
     if b <= 0 or h <= 0:
         raise ValueError(f"Row {row_number}: b and h must be positive.")
