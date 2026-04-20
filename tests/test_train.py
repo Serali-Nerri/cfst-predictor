@@ -74,7 +74,16 @@ def test_make_selection_metrics_cv_returns_expected_keys():
         {"mean_cv_score": 1.2, "mean_cv_rmse": 3.4, "mean_cv_r2": 0.95, "mean_cv_cov": 0.08}
     )
 
-    assert result == {"composite_objective": 1.2, "rmse": 3.4, "r2": 0.95, "cov": 0.08}
+    assert result == {
+        "composite_objective": 1.2,
+        "rmse": 3.4,
+        "mae": None,
+        "r2": 0.95,
+        "mape": None,
+        "mu": None,
+        "cov": 0.08,
+        "a20_index": None,
+    }
 
 
 def test_make_overfitting_summary_reports_status():
@@ -141,8 +150,12 @@ def test_make_common_artifact_payload_includes_shared_sections():
     assert result["selection_metrics_cv"] == {
         "composite_objective": 1.0,
         "rmse": 2.0,
+        "mae": None,
         "r2": 0.9,
+        "mape": None,
+        "mu": None,
         "cov": 0.1,
+        "a20_index": None,
     }
     assert result["final_n_estimators_from_cv"] == 123
     assert result["fold_best_iterations"] == [100, 120]
