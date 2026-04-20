@@ -26,7 +26,7 @@ def test_load_data_applies_log_transform_and_preserves_raw_target(tmp_path):
     assert np.allclose(loader.target_raw.to_numpy(dtype=float), df["Nexp (kN)"].to_numpy(dtype=float))
 
 
-def test_load_data_applies_sqrt_transform(tmp_path):
+def test_load_data_rejects_unsupported_target_transform(tmp_path):
     csv_path = tmp_path / "data.csv"
     df = pd.DataFrame({
         "feat": [1.0, 2.0],
@@ -35,12 +35,8 @@ def test_load_data_applies_sqrt_transform(tmp_path):
     df.to_csv(csv_path, index=False)
 
     loader = DataLoader(required_columns=["Nexp (kN)"])
-    _, target = loader.load_data(str(csv_path), "Nexp (kN)", target_transform="sqrt")
-
-    assert np.allclose(
-        target.to_numpy(dtype=float),
-        np.sqrt(df["Nexp (kN)"].to_numpy(dtype=float)),
-    )
+    with pytest.raises(ValueError, match="Unsupported target transform 'sqrt'"):
+        loader.load_data(str(csv_path), "Nexp (kN)", target_transform="sqrt")
 
 
 def test_load_data_without_transform_returns_original_target(tmp_path):
@@ -78,7 +74,7 @@ def test_load_data_raises_when_target_column_missing(tmp_path):
         loader.load_data(str(csv_path), "Nexp (kN)")
 
 
-def test_load_data_requires_precomputed_psi_target_columns(tmp_path):
+def test_load_data_requires_precomputed_strength_ratio_target_columns(tmp_path):
     csv_path = tmp_path / "data.csv"
     df = pd.DataFrame(
         {
@@ -94,18 +90,19 @@ def test_load_data_requires_precomputed_psi_target_columns(tmp_path):
             str(csv_path),
             "Nexp (kN)",
             target_transform=None,
-            target_mode="psi_over_npl",
+            target_mode="eta_u_over_npl",
         )
 
 
-def test_load_data_uses_precomputed_psi_target_columns(tmp_path):
+def test_load_data_uses_precomputed_r_target_columns(tmp_path):
     csv_path = tmp_path / "data.csv"
     df = pd.DataFrame(
         {
             "feat": [1.0, 2.0],
             "Nexp (kN)": [380.0, 304.0],
             "Npl (kN)": [380.0, 380.0],
-            "psi": [1.0, 0.8],
+            "eta_u": [1.0, 0.8],
+            "r": [0.0, -0.2],
             "axial_flag": ["axial", "eccentric"],
             "section_family": ["square", "rectangular"],
         }
@@ -117,12 +114,13 @@ def test_load_data_uses_precomputed_psi_target_columns(tmp_path):
         str(csv_path),
         "Nexp (kN)",
         target_transform=None,
-        target_mode="psi_over_npl",
+        target_mode="r_over_npl",
     )
 
     assert "Npl (kN)" in features.columns
-    assert "psi" not in features.columns
+    assert "eta_u" not in features.columns
+    assert "r" not in features.columns
     assert "axial_flag" in features.columns
     assert "section_family" in features.columns
-    assert np.allclose(target.to_numpy(dtype=float), np.array([1.0, 0.8]))
-    assert loader.training_target_name == "psi"
+    assert np.allclose(target.to_numpy(dtype=float), np.array([0.0, -0.2]))
+    assert loader.training_target_name == "r"

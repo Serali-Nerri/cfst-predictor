@@ -30,10 +30,12 @@ from sklearn.model_selection import KFold, StratifiedKFold, train_test_split
 
 from src.domain_features import (
     NPL_COLUMN,
-    TARGET_MODE_PSI_OVER_NPL,
+    TARGET_MODE_RAW,
     apply_target_transform,
+    get_keml_config_payload,
     get_training_target_name,
     normalize_target_mode,
+    project_report_target_to_model_space,
 )
 from src.utils.logger import setup_logger
 from src.data_loader import DataLoader
@@ -108,6 +110,7 @@ def build_training_context(
     validation_size: float,
     early_stopping_rounds: Optional[int],
     eval_metric: Optional[str],
+    keml_config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
     Build deterministic training context for artifact compatibility checks.
@@ -127,6 +130,7 @@ def build_training_context(
         "validation_size": validation_size,
         "early_stopping_rounds": early_stopping_rounds,
         "eval_metric": eval_metric,
+        "keml": get_keml_config_payload(keml_config),
     }
     context_json = json.dumps(
         context_payload, sort_keys=True, ensure_ascii=True
@@ -154,6 +158,7 @@ def build_optuna_tuning_fingerprint(
     validation_size: float,
     early_stopping_rounds: Optional[int],
     eval_metric: Optional[str],
+    keml_config: Dict[str, Any],
 ) -> str:
     """Build a deterministic fingerprint for the Optuna tuning strategy."""
     fingerprint_payload = {
@@ -166,6 +171,7 @@ def build_optuna_tuning_fingerprint(
         "validation_size": validation_size,
         "early_stopping_rounds": early_stopping_rounds,
         "eval_metric": eval_metric,
+        "keml": get_keml_config_payload(keml_config),
         "model_params": model_params,
         "cv": {
             "n_splits": get_cv_n_splits(cv_config),
@@ -237,8 +243,8 @@ def format_target_space_description(
     target_name = get_training_target_name(report_target_column, target_mode)
     if target_transform_type == "log":
         return f"ln({target_name}) -> inverse -> {report_target_column}"
-    if target_transform_type == "sqrt":
-        return f"sqrt({target_name}) -> inverse -> {report_target_column}"
+    if target_transform_type is not None:
+        raise ValueError(f"Unsupported target transform '{target_transform_type}'")
     if target_name != report_target_column:
         return f"{target_name} -> {report_target_column}"
     return report_target_column
@@ -253,8 +259,8 @@ def format_training_space_label(
     target_name = get_training_target_name(report_target_column, target_mode)
     if target_transform_type == "log":
         return f"ln({target_name}) space"
-    if target_transform_type == "sqrt":
-        return f"sqrt({target_name}) space"
+    if target_transform_type is not None:
+        raise ValueError(f"Unsupported target transform '{target_transform_type}'")
     return target_name
 
 
@@ -500,6 +506,10 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             Dict[str, Any],
             model_config.get("selection_objective", {}),
         )
+        keml_config = cast(Dict[str, Any], model_config.get("keml", {}))
+        use_keml_residual_split = bool(keml_config.get("enabled", False))
+        linear_feature_names = cast(List[str], keml_config.get("linear_features", []))
+        linear_ridge_alpha = float(keml_config.get("linear_ridge_alpha", 1.0))
         split_strategy = get_split_strategy(split_config)
         regime_config = cast(
             Dict[str, Any], evaluation_config.get("regime_analysis", {})
@@ -508,6 +518,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"Cross-validation RMSE metric space: {cv_metric_space}")
         logger.info(f"Data split strategy: {split_strategy}")
         logger.info(f"Target mode: {target_mode}")
+        logger.info(f"KeML residual split enabled: {use_keml_residual_split}")
 
         # Validate XGBoost params early so study naming matches the real tuning config.
         xgb_params = build_xgb_params(model_config)
@@ -525,6 +536,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             validation_size=validation_size,
             early_stopping_rounds=early_stopping_rounds,
             eval_metric=eval_metric,
+            keml_config=keml_config,
         )
         context_hash = training_context["context_hash"]
         tuning_fingerprint = build_optuna_tuning_fingerprint(
@@ -538,6 +550,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             validation_size,
             early_stopping_rounds,
             eval_metric,
+            keml_config,
         )
         study_name = build_versioned_study_name(
             data_path, context_hash, tuning_fingerprint
@@ -576,6 +589,12 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             target_transform_type=target_transform_type,
             derived_columns=data_loader.derived_columns,
         )
+        target_definition: Dict[str, Any] = {
+            "use_keml_residual_split": use_keml_residual_split,
+        }
+        if target_mode != TARGET_MODE_RAW:
+            target_definition["baseline_column"] = NPL_COLUMN
+        target_metadata["target_definition"] = target_definition
 
         # Step 2.5: Split data into train/test sets (FIXES DATA LEAKAGE)
         logger.info("\nStep 2.5: Splitting data into train/test sets...")
@@ -725,6 +744,9 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             early_stopping_rounds=early_stopping_rounds,
             eval_metric=eval_metric,
             selection_objective=selection_objective_config,
+            linear_feature_names=linear_feature_names,
+            linear_ridge_alpha=linear_ridge_alpha,
+            use_keml_residual_split=use_keml_residual_split,
         )
 
         params_source = (
@@ -840,12 +862,16 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         y_test_pred_orig = predictor.predict(X_test)
         logger.info("Mapped model outputs back to reported target space")
 
-        if target_mode == TARGET_MODE_PSI_OVER_NPL:
-            y_train_pred_model_raw = y_train_pred_orig / X_train_full[NPL_COLUMN].to_numpy(dtype=float)
-            y_test_pred_model_raw = y_test_pred_orig / X_test[NPL_COLUMN].to_numpy(dtype=float)
-        else:
-            y_train_pred_model_raw = y_train_pred_orig
-            y_test_pred_model_raw = y_test_pred_orig
+        y_train_pred_model_raw = project_report_target_to_model_space(
+            y_train_pred_orig,
+            target_mode=target_mode,
+            reference_features=X_train_full,
+        )
+        y_test_pred_model_raw = project_report_target_to_model_space(
+            y_test_pred_orig,
+            target_mode=target_mode,
+            reference_features=X_test,
+        )
 
         y_train_pred_trans = apply_target_transform(
             y_train_pred_model_raw,
@@ -1023,6 +1049,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             "n_train_fit_samples": len(X_train_full),
             "n_validation_samples": 0,
             "training_successful": True,
+            "keml": get_keml_config_payload(keml_config),
             "overfitting_check": {
                 "rmse_ratio_original": overfitting_summary["rmse_ratio_original"],
                 "rmse_ratio_transformed": overfitting_summary["rmse_ratio_transformed"],

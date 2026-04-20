@@ -5,6 +5,7 @@ import argparse
 import csv
 import math
 from pathlib import Path
+from typing import Sequence
 
 
 OUTPUT_COLUMNS = [
@@ -34,7 +35,8 @@ OUTPUT_COLUMNS = [
     "e1/e2",
     "e_bar",
     "Npl (kN)",
-    "psi",
+    "eta_u",
+    "r",
     "b/h",
     "L/h",
     "axial_flag",
@@ -85,7 +87,7 @@ def resolve_output_path(input_path: Path, output_path: Path | None) -> Path:
     return input_path.with_name(f"{input_path.stem}_feature_parameters_raw.csv")
 
 
-def resolve_columns(fieldnames: list[str] | None) -> dict[str, str]:
+def resolve_columns(fieldnames: Sequence[str] | None) -> dict[str, str]:
     if fieldnames is None:
         raise ValueError("Input CSV is missing a header row.")
 
@@ -291,7 +293,8 @@ def compute_feature_row(source: dict[str, float | str], row_number: int) -> list
     axial_flag = "axial" if abs(e_bar) <= 1e-12 else "eccentric"
     section_family = infer_section_family(b, h, r0, group)
     npl_kn = npl / 1000.0
-    psi = safe_divide(nexp, npl_kn) if nexp is not None else None
+    eta_u = safe_divide(nexp, npl_kn) if nexp is not None else None
+    r = None if eta_u is None else eta_u - 1.0
 
     return [
         b,
@@ -320,7 +323,8 @@ def compute_feature_row(source: dict[str, float | str], row_number: int) -> list
         eccentricity_ratio_12,
         e_bar,
         npl_kn,
-        psi,
+        eta_u,
+        r,
         safe_divide(b, h),
         safe_divide(length, h),
         axial_flag,

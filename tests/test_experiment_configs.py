@@ -11,12 +11,13 @@ EXPERIMENT_CONFIGS = [
 ]
 
 
-def test_experiment_configs_follow_psi_mainline_contract():
+def test_experiment_configs_follow_r_mainline_contract():
     for config_path in EXPERIMENT_CONFIGS:
         with config_path.open("r", encoding="utf-8") as handle:
             config = yaml.safe_load(handle)
+        assert isinstance(config, dict)
 
-        assert config["data"]["target_mode"] == "psi_over_npl"
+        assert config["data"]["target_mode"] == "r_over_npl"
         assert config["data"]["split"]["auxiliary_features"][0]["column"] == "lambda_bar"
         assert config["model"]["selection_objective"]["metric_space"] == "original_nexp"
         assert config["model"]["selection_objective"]["rmse_normalizer"] == "mean_actual"

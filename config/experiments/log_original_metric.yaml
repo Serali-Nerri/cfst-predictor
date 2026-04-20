@@ -3,11 +3,11 @@
 data:
   file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
-  target_mode: "psi_over_npl"
+  target_mode: "r_over_npl"
 
   target_transform:
-    enabled: true
-    type: "log"
+    enabled: false
+    type: null
 
   columns_to_drop:
     - "b (mm)"

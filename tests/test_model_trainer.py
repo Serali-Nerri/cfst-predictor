@@ -7,6 +7,7 @@ import pytest
 
 import src.model_trainer as model_trainer_module
 from src.model_trainer import (
+    KeMLRegressor,
     ModelTrainer,
     _build_selection_objective_config,
     _calculate_regression_metrics,
@@ -58,6 +59,7 @@ class ConstantPsiRegressor:
     def __init__(self, **kwargs):
         self.best_iteration = 7
         self.constant_prediction = 1.5
+        self.feature_importances_ = np.array([1.0])
 
     def fit(self, X_train, y_train, verbose=False, eval_set=None):
         return self
@@ -66,10 +68,122 @@ class ConstantPsiRegressor:
         return np.full(len(X_val), self.constant_prediction, dtype=float)
 
 
-def test_cross_validate_restores_report_space_metrics_for_psi_target(monkeypatch):
+class ConstantLinearModel:
+    def __init__(self, value):
+        self.value = float(value)
+
+    def predict(self, X):
+        return np.full(len(X), self.value, dtype=float)
+
+
+class RecordingRegressor:
+    last_init_kwargs = None
+    last_fit_kwargs = None
+    last_fit_target = None
+
+    def __init__(self, **kwargs):
+        type(self).last_init_kwargs = dict(kwargs)
+        self.best_iteration = 3
+        self.feature_importances_ = np.array([1.0])
+
+    def fit(self, X_train, y_train, **kwargs):
+        type(self).last_fit_kwargs = dict(kwargs)
+        type(self).last_fit_target = np.asarray(y_train, dtype=float)
+        return self
+
+    def predict(self, X_val):
+        return np.zeros(len(X_val), dtype=float)
+
+
+def test_keml_regressor_sums_linear_and_nonlinear_predictions():
+    regressor = KeMLRegressor(
+        linear_model=ConstantLinearModel(0.2),
+        nonlinear_model=ConstantPsiRegressor(),
+        linear_feature_names=["a"],
+    )
+    X = pd.DataFrame({"a": [1.0, 2.0], "b": [3.0, 4.0]})
+
+    predictions = regressor.predict(X)
+
+    assert np.allclose(predictions, np.array([1.7, 1.7]))
+
+
+def test_fit_model_preserves_eval_settings_for_keml_branch(monkeypatch):
     trainer = ModelTrainer(
         params={"device": "cpu", "n_jobs": -1, "random_state": 42},
-        target_mode="psi_over_npl",
+        target_mode="r_over_npl",
+        target_transform_type=None,
+        validation_size=0.0,
+        use_keml_residual_split=True,
+        linear_feature_names=["linear"],
+        linear_ridge_alpha=1.0,
+        early_stopping_rounds=9,
+        eval_metric="rmse",
+    )
+    X_train = pd.DataFrame({"linear": [0.0, 1.0, 2.0], "other": [1.0, 1.5, 2.0]})
+    y_train = pd.Series([0.0, 0.1, 0.2])
+    X_val = pd.DataFrame({"linear": [3.0, 4.0], "other": [2.5, 3.0]})
+    y_val = pd.Series([0.3, 0.4])
+
+    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+
+    trainer._fit_model(trainer.params, X_train, y_train, X_val, y_val)
+
+    assert RecordingRegressor.last_init_kwargs is not None
+    assert RecordingRegressor.last_init_kwargs["early_stopping_rounds"] == 9
+    assert RecordingRegressor.last_init_kwargs["eval_metric"] == "rmse"
+    assert RecordingRegressor.last_fit_kwargs is not None
+    assert "eval_set" in RecordingRegressor.last_fit_kwargs
+    eval_set = RecordingRegressor.last_fit_kwargs["eval_set"]
+    assert isinstance(eval_set, list)
+    assert len(eval_set) == 1
+    eval_X, eval_y = eval_set[0]
+    assert eval_X.equals(X_val)
+    assert np.asarray(eval_y, dtype=float).shape == (2,)
+    assert RecordingRegressor.last_fit_target is not None
+    assert RecordingRegressor.last_fit_target.shape == (3,)
+
+
+def test_fit_model_requires_same_keml_linear_features_in_validation(monkeypatch):
+    trainer = ModelTrainer(
+        params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+        target_mode="r_over_npl",
+        target_transform_type=None,
+        validation_size=0.0,
+        use_keml_residual_split=True,
+        linear_feature_names=["linear", "other_linear"],
+        linear_ridge_alpha=1.0,
+    )
+    X_train = pd.DataFrame(
+        {"linear": [0.0, 1.0, 2.0], "other_linear": [2.0, 3.0, 4.0], "other": [1.0, 1.5, 2.0]}
+    )
+    y_train = pd.Series([0.0, 0.1, 0.2])
+    X_val = pd.DataFrame({"linear": [3.0, 4.0], "other": [2.5, 3.0]})
+    y_val = pd.Series([0.3, 0.4])
+
+    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+
+    with pytest.raises(ValueError, match="Validation data is missing KeML linear features"):
+        trainer._fit_model(trainer.params, X_train, y_train, X_val, y_val)
+
+
+class InfoOnlyModel:
+    pass
+
+
+def test_get_model_info_uses_actual_model_type():
+    trainer = ModelTrainer(params={"device": "cpu", "n_jobs": -1, "random_state": 42})
+    trainer.model = InfoOnlyModel()
+
+    info = trainer.get_model_info()
+
+    assert info["model_type"] == "InfoOnlyModel"
+
+
+def test_cross_validate_restores_report_space_metrics_for_eta_u_target(monkeypatch):
+    trainer = ModelTrainer(
+        params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+        target_mode="eta_u_over_npl",
         target_transform_type=None,
         validation_size=0.0,
     )
@@ -100,7 +214,7 @@ def test_optimize_hyperparameters_uses_report_target_and_splitter(monkeypatch, t
         use_optuna=True,
         n_trials=1,
         optuna_timeout=1,
-        target_mode="psi_over_npl",
+        target_mode="eta_u_over_npl",
         target_transform_type=None,
         validation_size=0.0,
     )
@@ -114,10 +228,9 @@ def test_optimize_hyperparameters_uses_report_target_and_splitter(monkeypatch, t
     y_report = pd.Series([100.0, 200.0, 200.0, 400.0])
     splitter = RecordingSplitter()
 
-    fake_optuna = types.ModuleType("optuna")
-    setattr(fake_optuna, "create_study", lambda **kwargs: DummyStudy())
-    fake_optuna.samplers = types.SimpleNamespace(
-        TPESampler=lambda **kwargs: object()
+    fake_optuna = types.SimpleNamespace(
+        create_study=lambda **kwargs: DummyStudy(),
+        samplers=types.SimpleNamespace(TPESampler=lambda **kwargs: object()),
     )
     monkeypatch.setitem(sys.modules, "optuna", fake_optuna)
     monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", ConstantPsiRegressor)
@@ -141,7 +254,7 @@ def test_optimize_hyperparameters_uses_report_target_and_splitter(monkeypatch, t
     assert split_y.equals(y)
     assert split_groups is None
     assert results["best_params"] == {"max_depth": 3}
-    assert results["target_mode"] == "psi_over_npl"
+    assert results["target_mode"] == "eta_u_over_npl"
 
 
 def test_selection_objective_matches_planned_formula():
@@ -176,7 +289,7 @@ def test_selection_objective_rejects_unsupported_metric_space():
 def test_cross_validate_uses_requested_metric_space_for_selection(monkeypatch):
     trainer = ModelTrainer(
         params={"device": "cpu", "n_jobs": -1, "random_state": 42},
-        target_mode="psi_over_npl",
+        target_mode="eta_u_over_npl",
         target_transform_type=None,
         validation_size=0.0,
     )

@@ -9,11 +9,12 @@
 - “18 特征”结论保留为**历史经验**，不再视为当前主线的固定真理。
 - 当前代码主线已经改为：
   - 报告目标：`Nexp (kN)`
-  - 训练目标：`psi = Nexp / Npl`
-  - 可选训练变换：`log(psi)`
+  - 训练目标：`r = (Nexp - Npl) / Npl`
+  - 默认训练变换：关闭
 - 当前主线会由 `scripts/compute_feature_parameters.py` 离线生成并保留以下派生列：
   - `Npl (kN)`
-  - `psi`（仅当样本存在 `Nexp (kN)` 时可持久化输出）
+  - `eta_u = Nexp / Npl`（仅当样本存在 `Nexp (kN)` 时可持久化输出）
+  - `r = eta_u - 1`（仅当样本存在 `Nexp (kN)` 时可持久化输出）
   - `b/h`
   - `L/h`
   - `axial_flag`

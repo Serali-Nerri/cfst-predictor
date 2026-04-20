@@ -66,17 +66,17 @@ def test_predict_batch_matches_direct_predict():
     assert np.allclose(direct, batched)
 
 
-def test_predict_restores_nexp_for_psi_target_with_precomputed_npl_input():
+def test_predict_restores_nexp_for_eta_u_target_with_precomputed_npl_input():
     predictor = Predictor(
         model=ConstantModel(np.log(0.8)),
         feature_names=["As (mm^2)", "Ac (mm^2)", "fy (MPa)", "fc (MPa)", "Npl (kN)"],
         metadata={
-            "target_mode": "psi_over_npl",
+            "target_mode": "eta_u_over_npl",
             "report_target_column": "Nexp (kN)",
             "target_transform": {
                 "enabled": True,
                 "type": "log",
-                "mode": "psi_over_npl",
+                "mode": "eta_u_over_npl",
                 "original_column": "Nexp (kN)",
             },
         },
@@ -87,6 +87,33 @@ def test_predict_restores_nexp_for_psi_target_with_precomputed_npl_input():
             "Ac (mm^2)": [2000.0, 1800.0],
             "fy (MPa)": [300.0, 320.0],
             "fc (MPa)": [40.0, 50.0],
+            "Npl (kN)": [380.0, 474.0],
+        }
+    )
+
+    predictions = predictor.predict(X)
+
+    assert np.allclose(predictions, np.array([304.0, 379.2]))
+
+
+def test_predict_restores_nexp_for_r_target_with_precomputed_npl_input():
+    predictor = Predictor(
+        model=ConstantModel(-0.2),
+        feature_names=["feat", "Npl (kN)"],
+        metadata={
+            "target_mode": "r_over_npl",
+            "report_target_column": "Nexp (kN)",
+            "target_transform": {
+                "enabled": False,
+                "type": None,
+                "mode": "r_over_npl",
+                "original_column": "Nexp (kN)",
+            },
+        },
+    )
+    X = pd.DataFrame(
+        {
+            "feat": [1.0, 2.0],
             "Npl (kN)": [380.0, 474.0],
         }
     )

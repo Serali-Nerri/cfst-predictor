@@ -5,7 +5,7 @@
 本项目使用 `XGBoost` 构建一个面向混凝土填充钢管（CFST）柱极限承载力预测的机器学习流水线，覆盖以下当前已实现的能力：
 
 - 从已处理的特征 CSV 加载数据并提取报告目标列
-- 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`psi = Nexp / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family` 等派生列
+- 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`eta_u = Nexp / Npl`、`r = (Nexp - Npl) / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family` 等派生列
 - 先划分训练/测试集，再进行预处理，避免预处理数据泄漏
 - 按配置剔除指定特征列
 - 训练 `XGBRegressor`
@@ -18,17 +18,18 @@
 
 当前默认主线已经切换为：
 
-- `target_mode: psi_over_npl`
-- `target_transform.type: log`
+- `target_mode: r_over_npl`
+- `target_transform.enabled: false`
+- `model.keml.enabled: true`
 - `model.n_trials: 200`
-- 默认输出目录：`output/psi_over_npl_log_original_200`
+- 默认输出目录：`output/psi_over_npl_log_original_final_noopt`
 
 ## 当前实现的核心特性
 
 - **模块化结构**：`src/` 下按数据加载、预处理、训练、评估、预测、可视化拆分
 - **严格参数入口**：XGBoost 参数仅允许从 `config.model.params` 读取
 - **上下文隔离的最优参数复用**：通过 `context_hash` 约束 `logs/best_params_*.json` 的复用范围
-- **目标空间分离**：训练可在 `psi` / `log(psi)` 空间进行，最终统一回到 `Nexp` 空间报告
+- **目标空间分离**：训练可在 `eta_u` / `r` 空间进行，最终统一回到 `Nexp` 空间报告
 - **多指标评估**：当前实现 `RMSE`、`MAE`、`R²`、`MAPE`、`COV`
 - **可比较的 regime analysis**：先在训练集拟合 regime schema，再对 train/test 共用同一套区间
 - **训练产物保存**：保存模型、预处理器、特征名、训练元数据与评估报告
@@ -98,7 +99,7 @@ xgboost/
 
 1. 读取 `config/config.yaml`
 2. 从已处理的特征 CSV 加载报告目标 `Nexp (kN)`，并按 `target_mode` 构造训练目标
-3. 训练前假定 `scripts/compute_feature_parameters.py` 已离线生成 `Npl / psi / b/h / L/h / axial_flag / section_family`
+3. 训练前假定 `scripts/compute_feature_parameters.py` 已离线生成 `Npl / eta_u / r / b/h / L/h / axial_flag / section_family`
 4. 先划分 `train/test`
 5. 在 `train_full` 上执行 `CV` / `Optuna`；各 fold 内部按 `validation_size` 切验证集用于早停
 6. 使用 `CV` 复合目标选择参数，并根据各 fold `best_iteration` 选取最终 `n_estimators`
@@ -115,10 +116,11 @@ python train.py --config config/config.yaml
 
 以上命令会直接运行当前默认主线：
 
-- `target_mode: psi_over_npl`
-- `target_transform.type: log`
+- `target_mode: r_over_npl`
+- `target_transform.enabled: false`
+- `model.keml.enabled: true`
 - `n_trials: 200`
-- 默认输出目录：`output/psi_over_npl_log_original_200`
+- 默认输出目录：`output/psi_over_npl_log_original_final_noopt`
 
 指定输出目录：
 
@@ -139,10 +141,10 @@ CFST 字段释义与历史特征筛选说明请参见：`doc/CFST字段与特征
 data:
   file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
-  target_mode: "psi_over_npl"
+  target_mode: "r_over_npl"
   target_transform:
-    enabled: true
-    type: "log"
+    enabled: false
+    type: null
   columns_to_drop:
     - "b (mm)"
     - "h (mm)"
@@ -169,7 +171,7 @@ model:
     tree_method: "hist"
     device: "cpu"
     n_jobs: -1
-  use_optuna: true
+  use_optuna: false
   n_trials: 200
   optuna_timeout: 14400
   best_params_path: "logs/best_params_psi_over_npl_log_original_200.json"
@@ -197,9 +199,10 @@ cv:
 - 当前代码强制要求 XGBoost 参数定义在 `config.model.params`。
 - `config.cv` 当前会同时控制两条路径：`Optuna` 调参时使用的交叉验证折分，以及训练阶段输出的交叉验证报告。
 - `cv.n_splits` 控制折数，`cv.shuffle` 控制是否打乱样本，`cv.random_state` 在 `shuffle: true` 时控制折分复现性。
-- `target_mode: psi_over_npl` 表示模型学习 `psi = Nexp / Npl`，但最终仍回到 `Nexp` 空间汇报指标。
-- `target_transform` 当前作用于训练目标，而不是直接作用于报告目标。
-- 当前默认主线就是 `target_mode: psi_over_npl + target_transform.type: log`。
+- `target_mode: eta_u_over_npl` 表示模型学习 `eta_u = Nexp / Npl`，最终仍回到 `Nexp` 空间汇报指标。
+- `target_mode: r_over_npl` 表示模型学习 `r = (Nexp - Npl) / Npl`，最终仍回到 `Nexp` 空间汇报指标。
+- `target_transform` 作用于训练目标，而不是直接作用于报告目标。
+- 当前默认主线是 `target_mode: r_over_npl + target_transform.enabled: false + model.keml.enabled: true`。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
 - 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 `logs/best_params_*.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
 
@@ -211,10 +214,10 @@ cv:
 python train.py --config config/config.yaml
 ```
 
-则当前代码会在 `output/psi_over_npl_log_original_200/` 下生成类似产物：
+则当前代码会在 `output/psi_over_npl_log_original_final_noopt/` 下生成类似产物：
 
 ```text
-output/psi_over_npl_log_original_200/
+output/psi_over_npl_log_original_final_noopt/
 ├── xgboost_model.pkl
 ├── preprocessor.pkl
 ├── feature_names.json
@@ -258,15 +261,15 @@ output/psi_over_npl_log_original_200/
 - 从模型目录加载 `xgboost_model.pkl`、`preprocessor.pkl`、`feature_names.json`、`training_metadata.json`
 - 读取输入 CSV
 - 假定输入是已经由 `scripts/compute_feature_parameters.py` 生成的 processed 特征表
-- 当模型主线为 `psi_over_npl` 时，输入需要包含 `Npl (kN)`，但不需要提供 `psi` 或 `Nexp (kN)`
-- 在需要时将模型输出从 `psi` / `log(psi)` 恢复到 `Nexp`
+- 当模型主线为 `eta_u_over_npl` 或 `r_over_npl` 时，输入需要包含 `Npl (kN)`，但不需要提供 `eta_u`、`r` 或 `Nexp (kN)`
+- 在需要时将模型输出从 `eta_u` / `r` 空间恢复到 `Nexp`
 - 进行单条或批量预测
 - 可选导出 CSV
 
 ### 批量预测
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_200 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv
+python predict.py --model output/psi_over_npl_log_original_final_noopt --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv
 ```
 
 参数说明：
@@ -282,7 +285,7 @@ python predict.py --model output/psi_over_npl_log_original_200 --input data/proc
 当前实现不是交互式输入，而是：
 
 ```bash
-python predict.py --model output/psi_over_npl_log_original_200 --input data/processed/one_row_feature_parameters_raw.csv --single
+python predict.py --model output/psi_over_npl_log_original_final_noopt --input data/processed/one_row_feature_parameters_raw.csv --single
 ```
 
 在 `--single` 模式下：
@@ -322,33 +325,33 @@ python train.py --config config/config.yaml
 当 `use_optuna: true` 时，会：
 
 1. 在训练数据上进行调参
-2. 将最优参数保存到 `logs/best_params_psi_over_npl_log_original_200.json`
+2. 将最优参数保存到 `best_params_path` 指向的 JSON 文件（默认主线当前未启用 `use_optuna`）
 3. 在同一轮训练中使用最优参数重训最终模型
 
 ## 已知限制
 
 以下内容是当前代码的已知限制，写论文或报告时需要明确区分：
 
-### 1. `psi_over_npl` 推理仍依赖足够的原始特征
+### 1. `eta_u_over_npl` / `r_over_npl` 推理仍依赖足够的原始特征
 
-当训练主线是 `psi = Nexp / Npl` 时，推理脚本会自动把模型输出恢复回 `Nexp`，但前提是输入 CSV 已经是 processed 特征表，并包含 `Npl (kN)`。
+当训练主线是 `eta_u = Nexp / Npl` 或 `r = (Nexp - Npl) / Npl` 时，推理脚本会自动把模型输出恢复回 `Nexp`，但前提是输入 CSV 已经是 processed 特征表，并包含 `Npl (kN)`。
 
 当前推荐流程是：
 
 1. 先对原始数据运行 `scripts/compute_feature_parameters.py`
 2. 再将生成的 processed 特征表输入 `predict.py`
 
-如果输入里缺少 `Npl (kN)`，推理脚本无法完成 `psi -> Nexp` 的恢复。
+如果输入里缺少 `Npl (kN)`，推理脚本无法完成 `eta_u/r -> Nexp` 的恢复。
 
-### 2. `sqrt` 目标变换不是当前默认主线
+### 2. 非默认目标变换不属于当前主线
 
-当前代码已经具备 `sqrt` 训练目标变换与逆变换路径，但它不是本阶段默认实验主线，且测试覆盖明显少于 `log(psi)`。
+当前仓库只保留 `log` 目标变换路径；默认主线仍然关闭目标变换。
 
 因此：
 
-- 默认实验仍应使用 `target_mode: psi_over_npl`
-- 默认训练变换仍应使用 `target_transform.type: log`
-- 如需启用 `sqrt`，应先补充额外验证
+- 默认实验当前使用 `target_mode: r_over_npl`
+- 默认训练变换当前关闭，即 `target_transform.enabled: false`
+- 如需重新启用 `log` 变换，应先补充额外验证
 
 ### 3. 当前 CV 结果更适合作为调参参考，不宜直接作为无偏论文结论
 
@@ -368,7 +371,6 @@ python train.py --config config/config.yaml
 当前代码未额外检查：
 
 - `log` 变换下目标值是否全部大于 0
-- `sqrt` 变换下目标值是否全部非负
 - 数据是否存在超出经验适用范围的边界工况
 
 这部分更适合结合你的人工数据筛选规则、工程经验和后续经验公式一起处理。

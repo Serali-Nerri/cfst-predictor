@@ -3,11 +3,11 @@
 data:
   file_path: "data/processed/final_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
-  target_mode: "psi_over_npl"
+  target_mode: "r_over_npl"
 
   target_transform:
-    enabled: true
-    type: "log"
+    enabled: false
+    type: null
 
   columns_to_drop:
     - "b (mm)"
@@ -63,6 +63,20 @@ model:
     r2_threshold: 0.99
     cov_weight: 2.0
     r2_weight: 2.0
+
+  keml:
+    enabled: true
+    linear_ridge_alpha: 1.0
+    linear_features:
+      - "e/h"
+      - "lambda_bar"
+      - "b/h"
+      - "r0/h"
+      - "b/t"
+      - "ke"
+      - "xi"
+      - "L/h"
+      - "R (%)"
 
 cv:
   n_splits: 5

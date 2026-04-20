@@ -8,7 +8,10 @@ import xgboost as xgb
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple, Optional, List, Any, Protocol, cast
+from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 from optuna.trial import Trial
 import time
 import json
@@ -135,6 +138,27 @@ class CrossValidatorProtocol(Protocol):
 CrossValidatorLike = Any
 
 
+class KeMLRegressor:
+    """Knowledge-enhanced regressor with linear and nonlinear residual branches."""
+
+    def __init__(
+        self,
+        linear_model: Any,
+        nonlinear_model: Any,
+        linear_feature_names: List[str],
+    ) -> None:
+        self.linear_model = linear_model
+        self.nonlinear_model = nonlinear_model
+        self.linear_feature_names = list(linear_feature_names)
+        self.best_iteration = getattr(nonlinear_model, "best_iteration", None)
+        self.feature_importances_ = getattr(nonlinear_model, "feature_importances_", None)
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        linear_pred = self.linear_model.predict(X[self.linear_feature_names])
+        nonlinear_pred = self.nonlinear_model.predict(X)
+        return np.asarray(linear_pred, dtype=float) + np.asarray(nonlinear_pred, dtype=float)
+
+
 class ModelTrainer:
     """
     Model trainer for CFST XGBoost pipeline.
@@ -158,6 +182,9 @@ class ModelTrainer:
         early_stopping_rounds: Optional[int] = None,
         eval_metric: Optional[str] = None,
         selection_objective: Optional[Dict[str, Any]] = None,
+        linear_feature_names: Optional[List[str]] = None,
+        linear_ridge_alpha: float = 1.0,
+        use_keml_residual_split: bool = False,
     ):
         """
         Initialize ModelTrainer.
@@ -177,6 +204,9 @@ class ModelTrainer:
             early_stopping_rounds: Early stopping rounds for fold/internal validation
             eval_metric: XGBoost eval metric used when validation is available
             selection_objective: Composite CV/Optuna selection objective in report space
+            linear_feature_names: Feature subset used by the linear residual branch
+            linear_ridge_alpha: Ridge alpha for the linear residual branch
+            use_keml_residual_split: Whether to train linear + nonlinear residual branches
         """
         self.params = params or self._get_default_params()
         self.use_optuna = use_optuna
@@ -192,8 +222,11 @@ class ModelTrainer:
         self.early_stopping_rounds = early_stopping_rounds
         self.eval_metric = eval_metric
         self.selection_objective = _build_selection_objective_config(selection_objective)
+        self.linear_feature_names = list(linear_feature_names or [])
+        self.linear_ridge_alpha = float(linear_ridge_alpha)
+        self.use_keml_residual_split = bool(use_keml_residual_split)
         self.loaded_best_params = False
-        self.model: Optional[xgb.XGBRegressor] = None
+        self.model: Optional[Any] = None
         self.training_history = []
 
         # Auto-load best parameters if use_optuna is False
@@ -216,6 +249,7 @@ class ModelTrainer:
             f"validation_size={self.validation_size}, "
             f"early_stopping_rounds={self.early_stopping_rounds}, "
             f"eval_metric={self.eval_metric}, "
+            f"use_keml_residual_split={self.use_keml_residual_split}, "
             f"selection_objective={json.dumps(self.selection_objective, sort_keys=True)}"
         )
         logger.debug(f"Initial parameters: {json.dumps(self.params, indent=2)}")
@@ -346,6 +380,34 @@ class ModelTrainer:
             "n_jobs": self.params.get("n_jobs", -1),
         }
 
+    def _get_active_linear_feature_names(self, X: pd.DataFrame) -> List[str]:
+        if not self.linear_feature_names:
+            return []
+        return [feature for feature in self.linear_feature_names if feature in X.columns]
+
+    def _fit_linear_branch(
+        self,
+        X_train: pd.DataFrame,
+        y_train: pd.Series,
+        active_linear_features: List[str],
+    ) -> Tuple[Pipeline, np.ndarray]:
+        if not active_linear_features:
+            raise ValueError(
+                "KeML residual split requires at least one available linear feature"
+            )
+        linear_model = Pipeline(
+            [
+                ("scaler", StandardScaler()),
+                ("ridge", Ridge(alpha=self.linear_ridge_alpha)),
+            ]
+        )
+        linear_model.fit(X_train[active_linear_features], y_train)
+        linear_predictions = np.asarray(
+            linear_model.predict(X_train[active_linear_features]),
+            dtype=float,
+        )
+        return linear_model, linear_predictions
+
     def _fit_model(
         self,
         params: Dict[str, Any],
@@ -355,7 +417,7 @@ class ModelTrainer:
         y_val: Optional[pd.Series] = None,
         early_stopping_rounds: Optional[int] = None,
         eval_metric: Optional[str] = None,
-    ) -> xgb.XGBRegressor:
+    ) -> Any:
         """
         Fit one XGBoost model using the same validation/early-stopping path as final training.
         """
@@ -381,6 +443,46 @@ class ModelTrainer:
             model_params.pop("eval_metric", None)
 
         model = xgb.XGBRegressor(**model_params)
+        if self.use_keml_residual_split:
+            active_linear_features = self._get_active_linear_feature_names(X_train)
+            linear_model, linear_predictions_train = self._fit_linear_branch(
+                X_train,
+                y_train,
+                active_linear_features,
+            )
+            residual_y_train = pd.Series(
+                y_train.to_numpy(dtype=float) - linear_predictions_train,
+                index=y_train.index,
+            )
+            residual_fit_kwargs: Dict[str, Any] = {"verbose": False}
+            if X_val is not None and y_val is not None:
+                missing_linear_features = [
+                    feature for feature in active_linear_features if feature not in X_val.columns
+                ]
+                if missing_linear_features:
+                    raise ValueError(
+                        "Validation data is missing KeML linear features: "
+                        f"{missing_linear_features}"
+                    )
+                linear_predictions_val = np.asarray(
+                    linear_model.predict(X_val[active_linear_features]),
+                    dtype=float,
+                )
+                residual_y_val = pd.Series(
+                    y_val.to_numpy(dtype=float) - linear_predictions_val,
+                    index=y_val.index,
+                )
+                residual_fit_kwargs["eval_set"] = [(X_val, residual_y_val)]
+            model.fit(
+                X_train,
+                residual_y_train,
+                **residual_fit_kwargs,
+            )
+            return KeMLRegressor(
+                linear_model=linear_model,
+                nonlinear_model=model,
+                linear_feature_names=active_linear_features,
+            )
         model.fit(X_train, y_train, **fit_kwargs)
         return model
 
@@ -598,7 +700,7 @@ class ModelTrainer:
         eval_set: Optional[List[Tuple[pd.DataFrame, pd.Series]]] = None,
         early_stopping_rounds: Optional[int] = None,
         eval_metric: Optional[str] = None,
-    ) -> xgb.XGBRegressor:
+    ) -> Any:
         """
         Train XGBoost model.
 
@@ -666,9 +768,10 @@ class ModelTrainer:
             )
 
             # Log feature importance summary
-            if hasattr(self.model, "feature_importances_"):
+            feature_importances = getattr(self.model, "feature_importances_", None)
+            if feature_importances is not None:
                 importance_dict = dict(
-                    zip(X_train.columns, self.model.feature_importances_)
+                    zip(X_train.columns, feature_importances)
                 )
                 top_features = sorted(
                     importance_dict.items(), key=lambda x: x[1], reverse=True
@@ -945,7 +1048,7 @@ class ModelTrainer:
             return {}
 
         info = {
-            "model_type": "XGBRegressor",
+            "model_type": type(self.model).__name__,
             "trained": self.model is not None,
             "parameters": self.params,
             "n_features": getattr(self.model, "n_features_in_", None),

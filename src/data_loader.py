@@ -9,8 +9,14 @@ from typing import Tuple, List, Optional, cast
 from pathlib import Path
 
 from src.domain_features import (
+    ETA_U_COLUMN,
+    LEGACY_PSI_COLUMN,
+    LEGACY_RELATIVE_RESIDUAL_COLUMN,
+    LEGACY_STRENGTH_RATIO_COLUMN,
     NPL_COLUMN,
-    PSI_COLUMN,
+    R_COLUMN,
+    TARGET_MODE_ETA_U_OVER_NPL,
+    TARGET_MODE_R_OVER_NPL,
     apply_target_transform,
     compute_training_target,
     get_training_target_name,
@@ -56,8 +62,8 @@ class DataLoader:
         Args:
             file_path: Path to CSV file
             target_column: Name of the target column
-            target_transform: Transformation type ('log', 'sqrt', None)
-            target_mode: Modeled target definition ('raw', 'psi_over_npl')
+            target_transform: Transformation type ('log', None)
+            target_mode: Modeled target definition ('raw', 'eta_u_over_npl', 'r_over_npl')
 
         Returns:
             Tuple of (features_df, target_series_transformed)
@@ -86,17 +92,30 @@ class DataLoader:
         self.target_mode = normalize_target_mode(target_mode)
         self.derived_columns = []
 
-        required_target_mode_columns = []
-        if self.target_mode == "psi_over_npl":
-            required_target_mode_columns = [NPL_COLUMN, PSI_COLUMN]
-
-        missing_target_mode_columns = [
-            column for column in required_target_mode_columns if column not in df.columns
-        ]
+        missing_target_mode_columns = []
+        training_target_raw: Optional[pd.Series] = None
+        if self.target_mode in {TARGET_MODE_ETA_U_OVER_NPL, TARGET_MODE_R_OVER_NPL}:
+            if NPL_COLUMN not in df.columns:
+                missing_target_mode_columns.append(NPL_COLUMN)
+            else:
+                try:
+                    training_target_raw = compute_training_target(
+                        df,
+                        report_target_column=target_column,
+                        target_mode=self.target_mode,
+                    )
+                except ValueError as exc:
+                    error_text = str(exc)
+                    if error_text.startswith("Missing required columns for"):
+                        missing_target_mode_columns.append(
+                            get_training_target_name(target_column, self.target_mode)
+                        )
+                    else:
+                        raise
         if missing_target_mode_columns:
             error_msg = (
                 "Processed input is missing target-mode helper columns: "
-                f"{missing_target_mode_columns}. Run scripts/compute_feature_parameters.py first."
+                f"{sorted(set(missing_target_mode_columns))}. Run scripts/compute_feature_parameters.py first."
             )
             logger.error(error_msg)
             raise ValueError(error_msg)
@@ -119,13 +138,24 @@ class DataLoader:
         self.target_name = target_column
         target_raw = cast(pd.Series, df[target_column].copy())
         self.training_target_name = get_training_target_name(target_column, self.target_mode)
-        training_target_raw = compute_training_target(
-            df,
-            report_target_column=target_column,
-            target_mode=self.target_mode,
-        )
+        if training_target_raw is None:
+            training_target_raw = compute_training_target(
+                df,
+                report_target_column=target_column,
+                target_mode=self.target_mode,
+            )
 
         columns_to_exclude = {target_column}
+        target_derived_columns = {
+            ETA_U_COLUMN,
+            R_COLUMN,
+            LEGACY_PSI_COLUMN,
+            LEGACY_STRENGTH_RATIO_COLUMN,
+            LEGACY_RELATIVE_RESIDUAL_COLUMN,
+        }
+        columns_to_exclude.update(
+            column for column in target_derived_columns if column in df.columns
+        )
         if self.training_target_name in df.columns and self.training_target_name != target_column:
             columns_to_exclude.add(self.training_target_name)
 

@@ -33,18 +33,21 @@ def _base_source(include_nexp: bool = True):
     return source
 
 
-def test_compute_feature_parameters_outputs_psi_when_nexp_is_available():
+def test_compute_feature_parameters_outputs_eta_u_and_r_when_nexp_is_available():
     row = MODULE.compute_feature_row(_base_source(include_nexp=True), row_number=2)
-    psi_index = MODULE.OUTPUT_COLUMNS.index("psi")
+    eta_u_index = MODULE.OUTPUT_COLUMNS.index("eta_u")
+    r_index = MODULE.OUTPUT_COLUMNS.index("r")
     npl_index = MODULE.OUTPUT_COLUMNS.index("Npl (kN)")
     nexp_index = MODULE.OUTPUT_COLUMNS.index("Nexp (kN)")
 
-    assert "psi" in MODULE.OUTPUT_COLUMNS
+    assert "eta_u" in MODULE.OUTPUT_COLUMNS
+    assert "r" in MODULE.OUTPUT_COLUMNS
     assert row[nexp_index] == pytest.approx(1.0)
-    assert row[psi_index] == pytest.approx(row[nexp_index] / row[npl_index])
+    assert row[eta_u_index] == pytest.approx(row[nexp_index] / row[npl_index])
+    assert row[r_index] == pytest.approx(row[eta_u_index] - 1.0)
 
 
-def test_compute_feature_parameters_allows_missing_nexp_and_leaves_psi_blank():
+def test_compute_feature_parameters_allows_missing_nexp_and_leaves_derived_targets_blank():
     mapping = MODULE.resolve_columns(
         [
             "b (mm)",
@@ -60,9 +63,11 @@ def test_compute_feature_parameters_allows_missing_nexp_and_leaves_psi_blank():
         ]
     )
     row = MODULE.compute_feature_row(_base_source(include_nexp=False), row_number=2)
-    psi_index = MODULE.OUTPUT_COLUMNS.index("psi")
+    eta_u_index = MODULE.OUTPUT_COLUMNS.index("eta_u")
+    r_index = MODULE.OUTPUT_COLUMNS.index("r")
     nexp_index = MODULE.OUTPUT_COLUMNS.index("Nexp (kN)")
 
     assert "Nexp (kN)" not in mapping
     assert row[nexp_index] is None
-    assert row[psi_index] is None
+    assert row[eta_u_index] is None
+    assert row[r_index] is None
