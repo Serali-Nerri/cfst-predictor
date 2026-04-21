@@ -1,0 +1,180 @@
+# 示例配置：展示当前 train.py 真正读取和支持的主要配置项
+# 说明：
+# - 该文件用于说明“当前训练代码支持什么”，不是推荐你直接覆盖 config.yaml
+# - 当前默认主线仍是 eta_u_over_npl + log + KeML
+# - Box-Cox 目标变换当前仅作为实验支持，不代表已经纳入正式主线
+# - predict.py 主要依赖模型目录中的 training_metadata.json，而不是直接读取本 YAML
+# - 当前 train.py 真正从 paths 中读取的只有 output_dir；其余产物文件名由代码固定
+
+# =========================
+# 1. 数据与目标配置
+# =========================
+data:
+  # 已处理的特征 CSV 路径
+  file_path: "data/processed/final_feature_parameters_raw.csv"
+
+  # 报告目标列，最终评估会统一回到这个空间
+  target_column: "Nexp (kN)"
+
+  # 当前支持的 target_mode:
+  # - raw
+  # - eta_u_over_npl
+  # - r_over_npl
+  target_mode: "eta_u_over_npl"
+
+  target_transform:
+    # 是否启用训练目标变换
+    enabled: true
+    # 当前代码支持：
+    # - log
+    # - boxcox_<lambda>  （实验支持）
+    #   例如：boxcox_0.25 / boxcox_0.50 / boxcox_0.75 / boxcox_1.00
+    # 默认主线仍建议保持 log
+    type: "log"
+
+  # 训练前要从输入中剔除的列
+  columns_to_drop:
+    - "b (mm)"
+    - "h (mm)"
+    - "r0 (mm)"
+    - "t (mm)"
+    - "L (mm)"
+    - "lambda"
+
+  # 训练 / 测试集划分比例与随机种子
+  test_size: 0.2
+  random_state: 42
+
+  # 可选样本加权；当前仅支持 e_over_h_threshold
+  sample_weight:
+    enabled: false
+    strategy: "e_over_h_threshold"
+    column: "e/h"
+    threshold: 0.1
+    base_weight: 1.0
+    high_weight: 1.5
+
+  # 训练 / 测试集划分策略
+  split:
+    strategy: "regression_stratified"
+    target_bins: 10
+    auxiliary_features:
+      - column: "lambda_bar"
+        bins: 3
+    min_stratum_size: 12
+
+# =========================
+# 2. 模型与调参配置
+# =========================
+model:
+  params:
+    # 当前 train.py 约束只从这里读取 XGBoost 参数
+    objective: "reg:squarederror"
+    max_depth: 5
+    learning_rate: 0.0451669400461485
+    n_estimators: 3970
+    subsample: 0.7238136617365515
+    colsample_bytree: 0.4212006920305448
+    min_child_weight: 4
+    reg_alpha: 0.012529841627285286
+    reg_lambda: 0.44957639473634237
+    gamma: 0.00013613870646182803
+    random_state: 42
+    tree_method: "hist"
+    device: "cpu"
+    n_jobs: -1
+
+  use_optuna: true
+
+  # 当前支持值由代码归一化为 transformed / original
+  optuna_metric_space: "original"
+  cv_metric_space: "original"
+
+  n_trials: 100
+  optuna_timeout: 14400
+  optuna_storage_url: "sqlite:///logs/optuna_study.db"
+  best_params_path: "logs/best_params.json"
+
+  early_stopping_rounds: 100
+  eval_metric: "rmse"
+  validation_size: 0.15
+
+  # 当前选模目标实际依赖 RMSE / R² / COV 的组合；metric_space 建议保持 original_nexp
+  selection_objective:
+    metric_space: "original_nexp"
+    rmse_normalizer: "mean_actual"
+    cov_threshold: 0.10
+    r2_threshold: 0.99
+    cov_weight: 2.0
+    r2_weight: 2.0
+
+  # KeML：知识增强模块
+  keml:
+    enabled: true
+    linear_ridge_alpha: 1.0
+    linear_features:
+      - "e/h"
+      - "lambda_bar"
+      - "b/h"
+      - "r0/h"
+      - "b/t"
+      - "ke"
+      - "xi"
+      - "L/h"
+      - "R (%)"
+
+# =========================
+# 3. 交叉验证配置
+# =========================
+cv:
+  n_splits: 5
+  random_state: 42
+  shuffle: true
+
+# =========================
+# 4. 评估与 regime analysis
+# =========================
+evaluation:
+  regime_analysis:
+    enabled: true
+    reference_split: "train"
+    sort_metric: "cov"
+    regimes:
+      - name: "axiality"
+        mode: "categorical"
+        source: "feature"
+        column: "axial_flag"
+      - name: "section_family"
+        mode: "categorical"
+        source: "feature"
+        column: "section_family"
+      - name: "slenderness_state"
+        mode: "fixed_bins"
+        source: "feature"
+        column: "lambda_bar"
+        edges: [0.0, 0.25, 0.5, 1.0, .inf]
+        labels: ["very_stocky", "stocky", "intermediate", "slender"]
+      - name: "scale_npl"
+        mode: "train_quantile"
+        source: "feature"
+        column: "Npl (kN)"
+        bins: 5
+      - name: "eccentricity_severity"
+        mode: "fixed_bins"
+        source: "feature"
+        column: "e/h"
+        edges: [0.0, 0.0, 0.1, 0.3, .inf]
+        labels: ["axial", "small_ecc", "moderate_ecc", "large_ecc"]
+      - name: "confinement_level"
+        mode: "fixed_bins"
+        source: "feature"
+        column: "xi"
+        edges: [0.0, 0.5, 1.5, 3.0, .inf]
+        labels: ["low_conf", "mid_conf", "high_conf", "very_high_conf"]
+
+# =========================
+# 5. 输出路径配置
+# =========================
+paths:
+  # 当前 train.py 真正从 YAML 里读取的路径配置项
+  output_dir: "output/eta_u_over_npl_log_original_default_optuna100"

@@ -142,6 +142,8 @@ python train.py --config config/config.yaml --output output/xgboost_model
 
 主配置文件为 `config/config.yaml`。
 
+为了说明当前代码实际支持的配置项，仓库还提供了一份带注释的示例文件：`config/config.example.yaml`。
+
 相关补充文档：
 - CFST 字段、特征与参数计算说明：`doc/CFST字段与特征说明.md`
 - 数据集字段、几何统一口径与原始数据说明：`doc/DATA_README.md`
@@ -155,7 +157,7 @@ data:
   target_mode: "eta_u_over_npl"
   target_transform:
     enabled: true
-    type: "log"
+    type: "log"  # 默认主线；实验支持还包括 boxcox_<lambda>，例如 boxcox_0.50
   columns_to_drop:
     - "b (mm)"
     - "h (mm)"
@@ -217,6 +219,7 @@ cv:
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
 - 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
+- 当前代码还支持 `boxcox_<lambda>` 形式的目标变换作为**实验支持**，用于协议探索和对照实验；它不是当前默认主线，也不代表最终 target 方案已经定稿。
 - `data.sample_weight.enabled` 用于开启/关闭样本加权；关闭时保持原始无权重训练路径。
 - 当前样本加权仅支持 `data.sample_weight.strategy: e_over_h_threshold`：当指定列（默认 `e/h`）大于 `threshold` 时使用 `high_weight`，其余样本使用 `base_weight`。
 - 样本加权会同时作用于 `Optuna`、训练阶段 `CV`、fold 内验证集拆分以及最终 `train_full` 重训。
@@ -393,13 +396,15 @@ python train.py --config config/config.yaml
 
 ### 2. 非默认目标变换路径未作为当前主线验证
 
-当前仓库只保留 `log` 目标变换路径，且默认主线已经启用该变换。
+当前默认主线仍采用 `log` 目标变换，但代码中已加入 Box-Cox 目标变换的**实验支持**。
 
 因此：
 
 - 默认实验当前使用 `target_mode: eta_u_over_npl`
 - 默认训练变换当前使用 `target_transform.enabled: true` 与 `target_transform.type: log`
-- 如需引入其他目标变换类型，应先补充额外验证
+- 当前代码还支持 `target_transform.type: boxcox_<lambda>` 形式的实验性配置（例如 `boxcox_0.25`、`boxcox_0.50`）
+- 这些 Box-Cox 路径当前仅用于实验扫描与协议探索，不代表仓库主线已经切换
+- 如需将 Box-Cox 或其他目标变换纳入正式主线，仍应补充完整验证并统一研究结论
 
 ### 3. 当前 CV 结果更适合作为调参参考，不宜直接作为无偏论文结论
 
@@ -414,12 +419,17 @@ python train.py --config config/config.yaml
 - 以独立测试集指标作为主要泛化结果
 - 如果需要更严格的泛化估计，后续采用 `nested CV`
 
-### 4. 当前版本未加入目标定义域与边界校验
+### 4. 当前版本仅加入了基础的目标定义域校验，尚未加入工程边界校验
 
-当前代码未额外检查：
+当前代码已经对目标变换做了基础定义域检查：
 
-- `log` 变换下目标值是否全部大于 0
+- `log` 变换要求目标值全部大于 0
+- `boxcox_<lambda>` 变换也要求输入目标值全部大于 0
+
+但当前代码仍未额外检查：
+
 - 数据是否存在超出经验适用范围的边界工况
+- 样本是否超出你后续论文打算采用的工程筛选范围
 
 这部分更适合结合你的人工数据筛选规则、工程经验和后续经验公式一起处理。
 
