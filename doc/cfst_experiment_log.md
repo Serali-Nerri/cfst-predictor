@@ -68,17 +68,17 @@
 
 基线紧凑组输出：
 
-- Group A：`output/compact_group_A_optuna100/`
-- Group B：`output/compact_group_B_optuna100/`
-- Group C：`output/compact_group_C_optuna100/`
-- Group D：`output/compact_group_D_optuna100/`
+- Group A：`output/experiments/compact_group_A_optuna100/`
+- Group B：`output/experiments/compact_group_B_optuna100/`
+- Group C：`output/experiments/compact_group_C_optuna100/`
+- Group D：`output/experiments/compact_group_D_optuna100/`
 
 对应最优参数文件：
 
-- Group A：`logs/compact_group_A_best_params.json`
-- Group B：`logs/compact_group_B_best_params.json`
-- Group C：`logs/compact_group_C_best_params.json`
-- Group D：`logs/compact_group_D_best_params.json`
+- Group A：`logs/experiments/compact_group_A_best_params.json`
+- Group B：`logs/experiments/compact_group_B_best_params.json`
+- Group C：`logs/experiments/compact_group_C_best_params.json`
+- Group D：`logs/experiments/compact_group_D_best_params.json`
 
 后续 `compact_group_B` 迭代优化实验统一采用以下目录约定：
 

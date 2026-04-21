@@ -57,8 +57,8 @@ model:
   cv_metric_space: original
   n_trials: 100
   optuna_timeout: 14400
-  optuna_storage_url: sqlite:///logs/compact_group_A_optuna.db
-  best_params_path: logs/compact_group_A_best_params.json
+  optuna_storage_url: sqlite:///logs/experiments/compact_group_A_optuna.db
+  best_params_path: logs/experiments/compact_group_A_best_params.json
   early_stopping_rounds: 100
   eval_metric: rmse
   validation_size: 0.15
@@ -120,7 +120,7 @@ evaluation:
       labels: [low_conf, mid_conf, high_conf, very_high_conf]
       bins: 4
 paths:
-  output_dir: output/compact_group_A_optuna100
+  output_dir: output/experiments/compact_group_A_optuna100
   model_dir: models
   model_output: xgboost_model.pkl
   preprocessor_output: preprocessor.pkl

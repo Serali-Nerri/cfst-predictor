@@ -230,9 +230,10 @@ cv:
 - 默认主线配置仍放在 `config/config.yaml`。
 - 一次性对照实验或长期迭代实验，统一放在 `config/experiments/` 下的对应子目录中。
 - 当前 `compact_group_B` 的迭代优化配置统一放在：`config/experiments/compact_group_B_iterations/`
-- 对应实验输出统一放在：`output/experiments/compact_group_B_iterations/`
-- 对应 `Optuna` 数据库与最优参数文件统一放在：`logs/experiments/compact_group_B_iterations/`
-- 长期实验结论与每轮迭代记录统一写入：`doc/cfst_compact_feature_experiment_log.md`
+- 所有非默认主线的实验结果统一放在：`output/experiments/`
+- 所有非默认主线的实验日志、Optuna 数据库与最优参数统一放在：`logs/experiments/`
+- 其中 `compact_group_B` 的迭代优化结果和日志分别放在：`output/experiments/compact_group_B_iterations/` 与 `logs/experiments/compact_group_B_iterations/`
+- 长期实验结论与每轮迭代记录统一写入：`doc/cfst_experiment_log.md`
 
 这样可以把：
 - 可复用主线结果
@@ -275,11 +276,17 @@ output/eta_u_over_npl_log_original_default_optuna100/
 
 如果显式传入 `--output output/xgboost_model`，则会改写到你指定的目录。
 
-长期迭代实验推荐直接写入对应实验子目录，例如：
+非默认主线的对照实验、特征实验和迭代优化实验，统一写入：
+
+- `output/experiments/`
+- `logs/experiments/`
+
+例如当前 `compact_group_B` 的迭代优化结果统一放在：
 
 - `output/experiments/compact_group_B_iterations/`
+- `logs/experiments/compact_group_B_iterations/`
 
-当前仓库默认不会追踪新产生的 `output/` 结果目录；`output/experiments/` 只是约定俗成的阶段性实验结果聚合位置。需要长期保留并纳入版本控制的代表性结果，仍可单独放在 `output/` 根目录下的已跟踪位置。
+当前仓库默认不会追踪新产生的 `output/` 结果目录；`output/experiments/` 是阶段性实验结果的聚合位置。默认主线的代表性输出如 `output/eta_u_over_npl_log_original_default_optuna100/` 仍可单独保留在根目录下。
 
 ## 评估指标解释
 

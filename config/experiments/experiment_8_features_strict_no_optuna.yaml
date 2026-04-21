@@ -152,7 +152,7 @@ evaluation:
       - very_high_conf
       bins: 4
 paths:
-  output_dir: output/compare_8_features_strict_no_optuna
+  output_dir: output/experiments/compare_8_features_strict_no_optuna
   model_dir: models
   model_output: xgboost_model.pkl
   preprocessor_output: preprocessor.pkl
