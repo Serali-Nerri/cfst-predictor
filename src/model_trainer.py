@@ -385,11 +385,18 @@ class ModelTrainer:
             return []
         return [feature for feature in self.linear_feature_names if feature in X.columns]
 
+    @staticmethod
+    def _to_float_numpy(series: Optional[pd.Series]) -> Optional[np.ndarray]:
+        if series is None:
+            return None
+        return series.to_numpy(dtype=float)
+
     def _fit_linear_branch(
         self,
         X_train: pd.DataFrame,
         y_train: pd.Series,
         active_linear_features: List[str],
+        sample_weight: Optional[pd.Series] = None,
     ) -> Tuple[Pipeline, np.ndarray]:
         if not active_linear_features:
             raise ValueError(
@@ -401,7 +408,11 @@ class ModelTrainer:
                 ("ridge", Ridge(alpha=self.linear_ridge_alpha)),
             ]
         )
-        linear_model.fit(X_train[active_linear_features], y_train)
+        fit_kwargs: Dict[str, Any] = {}
+        sample_weight_numpy = self._to_float_numpy(sample_weight)
+        if sample_weight_numpy is not None:
+            fit_kwargs["ridge__sample_weight"] = sample_weight_numpy
+        linear_model.fit(X_train[active_linear_features], y_train, **fit_kwargs)
         linear_predictions = np.asarray(
             linear_model.predict(X_train[active_linear_features]),
             dtype=float,
@@ -417,12 +428,16 @@ class ModelTrainer:
         y_val: Optional[pd.Series] = None,
         early_stopping_rounds: Optional[int] = None,
         eval_metric: Optional[str] = None,
+        sample_weight: Optional[pd.Series] = None,
+        sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
         """
         Fit one XGBoost model using the same validation/early-stopping path as final training.
         """
         model_params = params.copy()
         fit_kwargs: Dict[str, Any] = {"verbose": False}
+        sample_weight_numpy = self._to_float_numpy(sample_weight)
+        sample_weight_eval_numpy = self._to_float_numpy(sample_weight_eval_set)
         active_early_stopping_rounds = (
             early_stopping_rounds
             if early_stopping_rounds is not None
@@ -430,8 +445,13 @@ class ModelTrainer:
         )
         active_eval_metric = eval_metric if eval_metric is not None else self.eval_metric
 
+        if sample_weight_numpy is not None:
+            fit_kwargs["sample_weight"] = sample_weight_numpy
+
         if X_val is not None and y_val is not None:
             fit_kwargs["eval_set"] = [(X_val, y_val)]
+            if sample_weight_eval_numpy is not None:
+                fit_kwargs["sample_weight_eval_set"] = [sample_weight_eval_numpy]
             if active_early_stopping_rounds is not None:
                 model_params["early_stopping_rounds"] = active_early_stopping_rounds
         else:
@@ -449,6 +469,7 @@ class ModelTrainer:
                 X_train,
                 y_train,
                 active_linear_features,
+                sample_weight=sample_weight,
             )
             residual_y_train = pd.Series(
                 y_train.to_numpy(dtype=float) - linear_predictions_train,
@@ -473,6 +494,10 @@ class ModelTrainer:
                     index=y_val.index,
                 )
                 residual_fit_kwargs["eval_set"] = [(X_val, residual_y_val)]
+                if sample_weight_eval_numpy is not None:
+                    residual_fit_kwargs["sample_weight_eval_set"] = [sample_weight_eval_numpy]
+            if sample_weight_numpy is not None:
+                residual_fit_kwargs["sample_weight"] = sample_weight_numpy
             model.fit(
                 X_train,
                 residual_y_train,
@@ -492,12 +517,20 @@ class ModelTrainer:
         y_train_fold: pd.Series,
         fold_index: int,
         stratify_labels: Optional[pd.Series] = None,
-    ) -> Tuple[pd.DataFrame, Optional[pd.DataFrame], pd.Series, Optional[pd.Series]]:
+        sample_weight: Optional[pd.Series] = None,
+    ) -> Tuple[
+        pd.DataFrame,
+        Optional[pd.DataFrame],
+        pd.Series,
+        Optional[pd.Series],
+        Optional[pd.Series],
+        Optional[pd.Series],
+    ]:
         """
         Split a fold into fit/validation subsets using the same strategy as final training.
         """
         if self.validation_size <= 0:
-            return X_train_fold, None, y_train_fold, None
+            return X_train_fold, None, y_train_fold, None, sample_weight, None
 
         split_kwargs: Dict[str, Any] = {
             "test_size": self.validation_size,
@@ -506,15 +539,33 @@ class ModelTrainer:
         if stratify_labels is not None and stratify_labels.nunique() > 1:
             split_kwargs["stratify"] = stratify_labels
 
-        try:
-            split_result = cast(
-                Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
-                train_test_split(
-                    X_train_fold,
-                    y_train_fold,
-                    **split_kwargs,
-                ),
+        split_inputs: List[Any] = [X_train_fold, y_train_fold]
+        if sample_weight is not None:
+            split_inputs.append(sample_weight)
+
+        def run_split() -> Tuple[
+            pd.DataFrame,
+            pd.DataFrame,
+            pd.Series,
+            pd.Series,
+            Optional[pd.Series],
+            Optional[pd.Series],
+        ]:
+            split_result = train_test_split(*split_inputs, **split_kwargs)
+            if sample_weight is None:
+                X_fit, X_val, y_fit, y_val = cast(
+                    Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
+                    split_result,
+                )
+                return X_fit, X_val, y_fit, y_val, None, None
+            X_fit, X_val, y_fit, y_val, weight_fit, weight_val = cast(
+                Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.Series, pd.Series],
+                split_result,
             )
+            return X_fit, X_val, y_fit, y_val, weight_fit, weight_val
+
+        try:
+            return run_split()
         except ValueError as exc:
             logger.warning(
                 "Fold %s stratified validation split failed (%s); retrying without stratification",
@@ -522,16 +573,7 @@ class ModelTrainer:
                 exc,
             )
             split_kwargs.pop("stratify", None)
-            split_result = cast(
-                Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series],
-                train_test_split(
-                    X_train_fold,
-                    y_train_fold,
-                    **split_kwargs,
-                ),
-            )
-
-        return split_result
+            return run_split()
 
     def _score_with_consistent_cv(
         self,
@@ -543,6 +585,7 @@ class ModelTrainer:
         target_transform_type: Optional[str] = None,
         stratify_labels: Optional[pd.Series] = None,
         y_report: Optional[pd.Series] = None,
+        sample_weight: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """
         Run fold-by-fold evaluation using the same fold-internal validation path as final training.
@@ -591,12 +634,18 @@ class ModelTrainer:
                 if stratify_labels is not None
                 else None
             )
+            fold_sample_weight = (
+                sample_weight.iloc[train_idx]
+                if sample_weight is not None
+                else None
+            )
 
-            X_fit_raw, X_val_raw, y_fit, y_val = self._split_train_validation(
+            X_fit_raw, X_val_raw, y_fit, y_val, weight_fit, weight_val = self._split_train_validation(
                 X_train_fold_raw,
                 y_train_fold,
                 fold_index,
                 stratify_labels=fold_strata,
+                sample_weight=fold_sample_weight,
             )
 
             preprocessor = Preprocessor(columns_to_drop=self.columns_to_drop)
@@ -610,6 +659,8 @@ class ModelTrainer:
                 y_train=y_fit,
                 X_val=X_val,
                 y_val=y_val,
+                sample_weight=weight_fit,
+                sample_weight_eval_set=weight_val,
             )
             y_pred = fold_model.predict(X_test)
             y_pred_report = restore_report_target(
@@ -723,6 +774,8 @@ class ModelTrainer:
         eval_set: Optional[List[Tuple[pd.DataFrame, pd.Series]]] = None,
         early_stopping_rounds: Optional[int] = None,
         eval_metric: Optional[str] = None,
+        sample_weight: Optional[pd.Series] = None,
+        sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
         """
         Train XGBoost model.
@@ -774,6 +827,8 @@ class ModelTrainer:
                 y_val=eval_y,
                 early_stopping_rounds=early_stopping_rounds,
                 eval_metric=eval_metric,
+                sample_weight=sample_weight,
+                sample_weight_eval_set=sample_weight_eval_set,
             )
 
             training_time = time.time() - start_time
@@ -820,6 +875,7 @@ class ModelTrainer:
         metric_space: Optional[str] = None,
         target_transform_type: Optional[str] = None,
         stratify_labels: Optional[pd.Series] = None,
+        sample_weight: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """
         Perform k-fold cross-validation.
@@ -857,6 +913,7 @@ class ModelTrainer:
             target_transform_type=target_transform_type,
             stratify_labels=stratify_labels,
             y_report=y_report,
+            sample_weight=sample_weight,
         )
         scoring_space = results["metric_space"]
 
@@ -892,6 +949,7 @@ class ModelTrainer:
         best_params_output_path: str = "logs/best_params.json",
         run_context: Optional[Dict[str, Any]] = None,
         stratify_labels: Optional[pd.Series] = None,
+        sample_weight: Optional[pd.Series] = None,
     ) -> Dict[str, Any]:
         """
         Optimize hyperparameters using Optuna.
@@ -985,6 +1043,7 @@ class ModelTrainer:
                 target_transform_type=self.target_transform_type,
                 stratify_labels=stratify_labels,
                 y_report=y_report,
+                sample_weight=sample_weight,
             )
 
             return float(cv_results["mean_cv_score"])

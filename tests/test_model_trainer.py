@@ -109,6 +109,23 @@ def test_keml_regressor_sums_linear_and_nonlinear_predictions():
     assert np.allclose(predictions, np.array([1.7, 1.7]))
 
 
+def test_fit_model_passes_sample_weights_to_plain_xgb(monkeypatch):
+    trainer = ModelTrainer(
+        params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+        validation_size=0.0,
+    )
+    X_train = pd.DataFrame({"feature": [0.0, 1.0, 2.0]})
+    y_train = pd.Series([0.0, 0.1, 0.2])
+    sample_weight = pd.Series([1.0, 2.0, 3.0])
+
+    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+
+    trainer._fit_model(trainer.params, X_train, y_train, sample_weight=sample_weight)
+
+    assert RecordingRegressor.last_fit_kwargs is not None
+    assert np.allclose(RecordingRegressor.last_fit_kwargs["sample_weight"], np.array([1.0, 2.0, 3.0]))
+
+
 def test_fit_model_preserves_eval_settings_for_keml_branch(monkeypatch):
     trainer = ModelTrainer(
         params={"device": "cpu", "n_jobs": -1, "random_state": 42},
@@ -126,15 +143,30 @@ def test_fit_model_preserves_eval_settings_for_keml_branch(monkeypatch):
     X_val = pd.DataFrame({"linear": [3.0, 4.0], "other": [2.5, 3.0]})
     y_val = pd.Series([0.3, 0.4])
 
+    sample_weight = pd.Series([1.0, 2.0, 3.0])
+    sample_weight_eval = pd.Series([4.0, 5.0])
+
     monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
 
-    trainer._fit_model(trainer.params, X_train, y_train, X_val, y_val)
+    trainer._fit_model(
+        trainer.params,
+        X_train,
+        y_train,
+        X_val,
+        y_val,
+        sample_weight=sample_weight,
+        sample_weight_eval_set=sample_weight_eval,
+    )
 
     assert RecordingRegressor.last_init_kwargs is not None
     assert RecordingRegressor.last_init_kwargs["early_stopping_rounds"] == 9
     assert RecordingRegressor.last_init_kwargs["eval_metric"] == "rmse"
     assert RecordingRegressor.last_fit_kwargs is not None
     assert "eval_set" in RecordingRegressor.last_fit_kwargs
+    assert "sample_weight" in RecordingRegressor.last_fit_kwargs
+    assert "sample_weight_eval_set" in RecordingRegressor.last_fit_kwargs
+    assert np.allclose(RecordingRegressor.last_fit_kwargs["sample_weight"], np.array([1.0, 2.0, 3.0]))
+    assert np.allclose(RecordingRegressor.last_fit_kwargs["sample_weight_eval_set"][0], np.array([4.0, 5.0]))
     eval_set = RecordingRegressor.last_fit_kwargs["eval_set"]
     assert isinstance(eval_set, list)
     assert len(eval_set) == 1

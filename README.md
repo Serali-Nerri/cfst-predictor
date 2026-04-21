@@ -69,12 +69,20 @@ xgboost/
 ├── config/
 │   ├── config.yaml
 │   └── experiments/
+│       ├── compact_group_B_iterations/
+│       └── ...
 ├── data/
 │   ├── raw/
 │   └── processed/
 ├── doc/
 ├── logs/
+│   ├── experiments/
+│   │   └── compact_group_B_iterations/
+│   └── ...
 ├── output/
+│   ├── experiments/
+│   │   └── compact_group_B_iterations/
+│   └── ...
 ├── plan/
 ├── scripts/
 ├── src/
@@ -157,6 +165,13 @@ data:
     - "lambda"
   test_size: 0.2
   random_state: 42
+  sample_weight:
+    enabled: false
+    strategy: "e_over_h_threshold"
+    column: "e/h"
+    threshold: 0.1
+    base_weight: 1.0
+    high_weight: 1.5
 
 model:
   params:
@@ -202,10 +217,29 @@ cv:
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
 - 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
+- `data.sample_weight.enabled` 用于开启/关闭样本加权；关闭时保持原始无权重训练路径。
+- 当前样本加权仅支持 `data.sample_weight.strategy: e_over_h_threshold`：当指定列（默认 `e/h`）大于 `threshold` 时使用 `high_weight`，其余样本使用 `base_weight`。
+- 样本加权会同时作用于 `Optuna`、训练阶段 `CV`、fold 内验证集拆分以及最终 `train_full` 重训。
 - `config.cv` 会同时控制 `Optuna` 调参和训练阶段输出的交叉验证报告；`cv.n_splits` 控制折数，`cv.shuffle` 与 `cv.random_state` 控制折分复现性。
 - `selection_objective` 会在原始 `Nexp` 空间综合考虑 `RMSE / R² / COV`，而不是只按单一 RMSE 选模。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
 - 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 `logs/best_params_*.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
+
+## 实验配置与结果目录约定
+
+- 默认主线配置仍放在 `config/config.yaml`。
+- 一次性对照实验或长期迭代实验，统一放在 `config/experiments/` 下的对应子目录中。
+- 当前 `compact_group_B` 的迭代优化配置统一放在：`config/experiments/compact_group_B_iterations/`
+- 对应实验输出统一放在：`output/experiments/compact_group_B_iterations/`
+- 对应 `Optuna` 数据库与最优参数文件统一放在：`logs/experiments/compact_group_B_iterations/`
+- 长期实验结论与每轮迭代记录统一写入：`doc/cfst_compact_feature_experiment_log.md`
+
+这样可以把：
+- 可复用主线结果
+- 一次性实验结果
+- 迭代调优实验结果
+
+分开管理，避免 `config/`、`logs/`、`output/` 根目录继续堆积。
 
 ## 训练输出
 
@@ -240,6 +274,12 @@ output/eta_u_over_npl_log_original_default_optuna100/
 ```
 
 如果显式传入 `--output output/xgboost_model`，则会改写到你指定的目录。
+
+长期迭代实验推荐直接写入对应实验子目录，例如：
+
+- `output/experiments/compact_group_B_iterations/`
+
+当前仓库默认不会追踪新产生的 `output/` 结果目录；`output/experiments/` 只是约定俗成的阶段性实验结果聚合位置。需要长期保留并纳入版本控制的代表性结果，仍可单独放在 `output/` 根目录下的已跟踪位置。
 
 ## 评估指标解释
 

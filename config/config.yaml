@@ -20,6 +20,14 @@ data:
   test_size: 0.2
   random_state: 42
 
+  sample_weight:
+    enabled: false
+    strategy: "e_over_h_threshold"
+    column: "e/h"
+    threshold: 0.1
+    base_weight: 1.0
+    high_weight: 1.5
+
   split:
     strategy: "regression_stratified"
     target_bins: 10

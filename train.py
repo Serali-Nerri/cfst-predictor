@@ -107,6 +107,7 @@ def build_training_context(
     selection_objective: Dict[str, Any],
     split_strategy: str,
     split_config: Dict[str, Any],
+    sample_weight_config: Dict[str, Any],
     validation_size: float,
     early_stopping_rounds: Optional[int],
     eval_metric: Optional[str],
@@ -127,6 +128,7 @@ def build_training_context(
         "selection_objective": selection_objective,
         "split_strategy": split_strategy,
         "split_config": split_config,
+        "sample_weight_config": sample_weight_config,
         "validation_size": validation_size,
         "early_stopping_rounds": early_stopping_rounds,
         "eval_metric": eval_metric,
@@ -155,6 +157,7 @@ def build_optuna_tuning_fingerprint(
     selection_objective: Dict[str, Any],
     split_strategy: str,
     split_config: Dict[str, Any],
+    sample_weight_config: Dict[str, Any],
     validation_size: float,
     early_stopping_rounds: Optional[int],
     eval_metric: Optional[str],
@@ -168,6 +171,7 @@ def build_optuna_tuning_fingerprint(
         "selection_objective": selection_objective,
         "split_strategy": split_strategy,
         "split_config": split_config,
+        "sample_weight_config": sample_weight_config,
         "validation_size": validation_size,
         "early_stopping_rounds": early_stopping_rounds,
         "eval_metric": eval_metric,
@@ -358,6 +362,44 @@ def make_data_split_summary(
     }
 
 
+def build_sample_weights(
+    features: pd.DataFrame,
+    sample_weight_config: Optional[Dict[str, Any]],
+) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
+    if not sample_weight_config or not sample_weight_config.get("enabled", False):
+        return None, {"enabled": False}
+
+    strategy = str(sample_weight_config.get("strategy", "e_over_h_threshold")).strip().lower()
+    if strategy != "e_over_h_threshold":
+        raise ValueError("sample_weight.strategy currently only supports 'e_over_h_threshold'")
+
+    column = str(sample_weight_config.get("column", "e/h"))
+    if column not in features.columns:
+        raise ValueError(f"sample_weight column '{column}' not found in features")
+
+    threshold = float(sample_weight_config.get("threshold", 0.1))
+    high_weight = float(sample_weight_config.get("high_weight", 1.5))
+    base_weight = float(sample_weight_config.get("base_weight", 1.0))
+    if high_weight <= 0 or base_weight <= 0:
+        raise ValueError("sample weights must be positive")
+
+    column_values = cast(pd.Series, features[column].astype(float))
+    weights = pd.Series(base_weight, index=features.index, dtype=float)
+    high_mask = column_values > threshold
+    weights.loc[high_mask] = high_weight
+    metadata = {
+        "enabled": True,
+        "strategy": strategy,
+        "column": column,
+        "threshold": threshold,
+        "base_weight": base_weight,
+        "high_weight": high_weight,
+        "n_high_weight": int(high_mask.sum()),
+        "n_base_weight": int((~high_mask).sum()),
+    }
+    return weights, metadata
+
+
 def make_common_artifact_payload(
     *,
     context_hash: str,
@@ -371,6 +413,7 @@ def make_common_artifact_payload(
     split_strategy: str,
     effective_split_strategy: str,
     stratification_metadata: Dict[str, Any],
+    sample_weight_metadata: Dict[str, Any],
     cv_results: Dict[str, Any],
     train_metrics: Dict[str, Any],
     test_metrics: Dict[str, Any],
@@ -394,6 +437,7 @@ def make_common_artifact_payload(
         "split_strategy_requested": split_strategy,
         "split_strategy_effective": effective_split_strategy,
         "stratification_metadata": stratification_metadata,
+        "sample_weight_metadata": sample_weight_metadata,
         "selection_metrics_cv": make_selection_metrics_cv(cv_results),
         "train_metrics_original_space": train_metrics,
         "train_full_apparent_metrics_original_space": train_metrics,
@@ -478,6 +522,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         target_column = data_config.get("target_column", "K")
         columns_to_drop = data_config.get("columns_to_drop", [])
         split_config = cast(Dict[str, Any], data_config.get("split", {}))
+        sample_weight_config = cast(Dict[str, Any], data_config.get("sample_weight", {}))
         if not data_path:
             raise ValueError("config.data.file_path is required")
 
@@ -543,6 +588,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             selection_objective=selection_objective_config,
             split_strategy=split_strategy,
             split_config=split_config,
+            sample_weight_config=sample_weight_config,
             validation_size=validation_size,
             early_stopping_rounds=early_stopping_rounds,
             eval_metric=eval_metric,
@@ -557,6 +603,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             selection_objective_config,
             split_strategy,
             split_config,
+            sample_weight_config,
             validation_size,
             early_stopping_rounds,
             eval_metric,
@@ -592,6 +639,16 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(
             f"Data loaded: {len(features)} samples, {len(features.columns)} features"
         )
+
+        sample_weight_full, sample_weight_metadata = build_sample_weights(
+            features,
+            sample_weight_config,
+        )
+        if sample_weight_full is not None:
+            logger.info(
+                "Sample weighting enabled: %s",
+                json.dumps(sample_weight_metadata, ensure_ascii=False, sort_keys=True),
+            )
 
         target_metadata = build_target_metadata(
             report_target_column=target_column,
@@ -660,6 +717,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                     pd.Series,
                     pd.Series,
                     pd.Series,
+                    Optional[pd.Series],
+                    Optional[pd.Series],
                 ],
                 train_test_split(
                     features,
@@ -667,6 +726,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                     report_target_raw,
                     training_target_raw,
                     stratify_labels_full,
+                    sample_weight_full,
                     **split_kwargs,
                 ),
             )
@@ -681,6 +741,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 _,
                 train_strata_full,
                 test_strata,
+                sample_weight_train_full,
+                _,
             ) = split_result
         else:
             split_result = cast(
@@ -693,12 +755,15 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                     pd.Series,
                     pd.Series,
                     pd.Series,
+                    Optional[pd.Series],
+                    Optional[pd.Series],
                 ],
                 train_test_split(
                     features,
                     target_transformed,
                     report_target_raw,
                     training_target_raw,
+                    sample_weight_full,
                     **split_kwargs,
                 ),
             )
@@ -710,6 +775,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 y_train_report_full,
                 y_test_report,
                 _,
+                _,
+                sample_weight_train_full,
                 _,
             ) = split_result
             train_strata_full = None
@@ -777,6 +844,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                 best_params_output_path=best_params_path,
                 run_context=training_context,
                 stratify_labels=train_strata_full,
+                sample_weight=sample_weight_train_full,
             )
             logger.info(
                 "Optuna optimization completed: "
@@ -805,6 +873,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             metric_space=cv_metric_space,
             target_transform_type=target_transform_type,
             stratify_labels=train_strata_full,
+            sample_weight=sample_weight_train_full,
         )
         logger.info(
             "Cross-validation composite score "
@@ -849,6 +918,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             eval_set=None,
             early_stopping_rounds=None,
             eval_metric=None,
+            sample_weight=sample_weight_train_full,
         )
         logger.info(
             "Final model training completed on target space: "
@@ -1043,6 +1113,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             split_strategy=split_strategy,
             effective_split_strategy=effective_split_strategy,
             stratification_metadata=stratification_metadata,
+            sample_weight_metadata=sample_weight_metadata,
             cv_results=cv_results,
             train_metrics=train_metrics,
             test_metrics=test_metrics,

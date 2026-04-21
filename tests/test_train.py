@@ -5,6 +5,7 @@ from sklearn.model_selection import KFold
 
 from train import (
     build_cv_splitter,
+    build_sample_weights,
     get_cv_n_splits,
     make_common_artifact_payload,
     make_data_split_summary,
@@ -67,6 +68,27 @@ def test_select_final_n_estimators_uses_median_best_iteration_plus_one():
 
     assert final_n_estimators == 12
     assert fold_best_iterations == [10, 12, 14]
+
+
+def test_build_sample_weights_supports_high_e_over_h_emphasis():
+    features = pd.DataFrame({"e/h": [0.0, 0.05, 0.15]}, index=[10, 11, 12])
+
+    weights, metadata = build_sample_weights(
+        features,
+        {
+            "enabled": True,
+            "strategy": "e_over_h_threshold",
+            "column": "e/h",
+            "threshold": 0.1,
+            "base_weight": 1.0,
+            "high_weight": 1.8,
+        },
+    )
+
+    assert weights is not None
+    assert weights.to_dict() == {10: 1.0, 11: 1.0, 12: 1.8}
+    assert metadata["n_high_weight"] == 1
+    assert metadata["n_base_weight"] == 2
 
 
 def test_make_selection_metrics_cv_returns_expected_keys():
@@ -134,6 +156,7 @@ def test_make_common_artifact_payload_includes_shared_sections():
         split_strategy="random",
         effective_split_strategy="random",
         stratification_metadata={"strategy": "random"},
+        sample_weight_metadata={"enabled": False},
         cv_results={"mean_cv_score": 1.0, "mean_cv_rmse": 2.0, "mean_cv_r2": 0.9, "mean_cv_cov": 0.1},
         train_metrics={"rmse": 1.0},
         test_metrics={"rmse": 2.0},

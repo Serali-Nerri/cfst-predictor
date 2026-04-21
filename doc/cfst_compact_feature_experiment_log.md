@@ -66,6 +66,8 @@
 
 ## 3. 实验输出位置
 
+基线紧凑组输出：
+
 - Group A：`output/compact_group_A_optuna100/`
 - Group B：`output/compact_group_B_optuna100/`
 - Group C：`output/compact_group_C_optuna100/`
@@ -77,6 +79,12 @@
 - Group B：`logs/compact_group_B_best_params.json`
 - Group C：`logs/compact_group_C_best_params.json`
 - Group D：`logs/compact_group_D_best_params.json`
+
+后续 `compact_group_B` 迭代优化实验统一采用以下目录约定：
+
+- 实验配置目录：`config/experiments/compact_group_B_iterations/`
+- 实验结果目录：`output/experiments/compact_group_B_iterations/`
+- 实验日志/Optuna/最优参数目录：`logs/experiments/compact_group_B_iterations/`
 
 ---
 
@@ -254,3 +262,132 @@ Group D 去掉了 `e/h`，仅保留 `e_bar` 作为偏心描述。结果显示：
 3. **A 更适合作为更稳健、更紧凑的 baseline**
 4. **当前阶段没有必要优先靠“继续增加调参轮数”来解决问题**
 5. 下一步更值得投入的是：在 A/B 的基础上继续做针对性机理修正，而不是盲目增加 Optuna 轮数
+
+---
+
+## 10. 修复 665 行样本后的迭代优化日志
+
+> 说明：以下结果基于最新数据底座（已恢复此前跳过的 665 行样本），与上文旧版 A/B/C/D 对比结果不直接同口径。
+
+### Iteration 1：分层切分升级（Group B + `e/h` 辅助分层）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：在原有 `lambda_bar` 辅助分层基础上，新增 `e/h` 作为第二辅助分层特征
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter1_split_eh.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter1_split_eh_optuna100/`
+
+实际分层结果：
+- `lambda_bar`：`used_bins = 3`
+- `e/h`：`used_bins = 1`
+
+说明 `e/h` 在当前稳定分层约束下没有形成有效附加分层，实际切分基本退化为原有方案。
+
+Test 指标：
+- `R² = 0.9735`
+- `COV = 0.1422`
+- `μ = 1.0094`
+- `a20-index = 0.9358`
+
+结论：
+- 相比历史 Group B 记录未显示出收益
+- 且 `COV` 明显高于目标线 `0.10`
+- 单独增加 `e/h` 辅助分层不值得继续保留
+
+### Iteration 2：分层切分升级（Group B + `e_bar` 辅助分层）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：在原有 `lambda_bar` 辅助分层基础上，新增 `e_bar` 作为第二辅助分层特征
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter2_split_ebar.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter2_split_ebar_optuna100/`
+
+实际分层结果：
+- `lambda_bar`：`used_bins = 3`
+- `e_bar`：`used_bins = 1`
+
+说明 `e_bar` 也没有形成有效附加分层，最终切分与 Iteration 1 的有效结构一致。
+
+Test 指标：
+- `R² = 0.9735`
+- `COV = 0.1422`
+- `μ = 1.0094`
+- `a20-index = 0.9358`
+
+结论：
+- 与 Iteration 1 完全一致，无改进
+- 说明在当前配置下，继续沿“额外偏心辅助分层”这一方向推进，短期内大概率不会带来收益
+- 下一轮更值得尝试的单变量方向应转向：样本加权，或在 Group B 基础上进一步精简/替换特征
+
+### Iteration 3：精简特征组（Group B 去掉 `e1/e2`）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：删除 `e1/e2`
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter3_drop_e1e2.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter3_drop_e1e2_optuna100/`
+
+Test 指标：
+- `R² = 0.9827`
+- `COV = 0.1428`
+- `μ = 1.0105`
+- `a20-index = 0.9317`
+
+结论：
+- 相比 Iteration 1/2，`R²` 明显提升
+- 但 `COV` 进一步变差，`a20-index` 也下降
+- 说明在修复 665 行样本后的数据上，`e1/e2` 依然更有助于论文/工程口径指标，而删掉它更偏向于换取更高的拟合优度
+
+### Iteration 4：加权训练（高偏心样本加权，`e/h > 0.1` 权重 1.5）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：启用样本加权，对 `e/h > 0.1` 的样本赋予更高权重
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter4_weight_eh.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter4_weight_eh_optuna100/`
+- 加权设置：`threshold = 0.1`, `high_weight = 1.5`, `n_high_weight = 1955`
+
+Test 指标：
+- `R² = 0.9863`
+- `COV = 0.1383`
+- `μ = 1.0097`
+- `a20-index = 0.9408`
+
+结论：
+- 相比 Iteration 3，`R²` 继续提升，`COV` 也有所下降
+- 但距目标 `R² >= 0.99` 且 `COV <= 0.10` 仍有明显差距
+- 样本加权是目前已验证有效的方向，值得继续只调一个变量做强度扫描
+
+### Iteration 5：加权训练（高偏心样本加权，`e/h > 0.1` 权重 2.0）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：将高偏心样本权重从 `1.5` 提高到 `2.0`
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter5_weight_eh2.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter5_weight_eh2_optuna100/`
+- 加权设置：`threshold = 0.1`, `high_weight = 2.0`, `n_high_weight = 1955`
+
+Test 指标：
+- `R² = 0.9861`
+- `COV = 0.1370`
+- `μ = 1.0090`
+- `a20-index = 0.9370`
+
+结论：
+- 相比 Iteration 4，`COV` 继续小幅下降，`μ` 也更接近 1
+- 但 `R²` 略有回落，`a20-index` 也略降
+- 权重强度继续增大并不是单调增益，更值得继续只改“权重作用区间”而不是一味加大权重
+
+### Iteration 6：加权训练（高偏心样本加权，`e/h > 0.2` 权重 2.0）
+
+- 基线特征组：`fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2`
+- 本轮只改 1 个变量：将高权重作用阈值从 `e/h > 0.1` 改为 `e/h > 0.2`
+- 配置文件：`config/experiments/compact_group_B_iterations/compact_group_B_iter6_weight_eh_threshold02.yaml`
+- 输出目录：`output/experiments/compact_group_B_iterations/compact_group_B_iter6_weight_eh_threshold02_optuna100/`
+- 加权设置：`threshold = 0.2`, `high_weight = 2.0`, `n_high_weight = 1259`
+
+Test 指标：
+- `R² = 0.9716`
+- `COV = 0.1367`
+- `μ = 1.0095`
+- `a20-index = 0.9382`
+
+结论：
+- `COV` 比 Iteration 5 略降，但 `R²` 明显回落
+- 说明把高权重只集中到更极端偏心区间，会牺牲整体拟合稳定性
+- 当前样本加权方向里，已验证的相对更优折中点仍是 Iteration 4/5，而不是进一步抬高阈值
