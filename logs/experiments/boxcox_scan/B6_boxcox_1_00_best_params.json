@@ -1,0 +1,22 @@
+{
+  "trial_number": 62,
+  "best_composite_objective": 6.460959899040594,
+  "best_score": 6.460959899040594,
+  "parameters": {
+    "max_depth": 6,
+    "learning_rate": 0.06127857530424744,
+    "n_estimators": 3923,
+    "subsample": 0.6842113476500804,
+    "colsample_bytree": 0.5155716355449486,
+    "min_child_weight": 4,
+    "reg_alpha": 0.002077742112895957,
+    "reg_lambda": 0.684133182432895,
+    "gamma": 0.0004889155570246858
+  },
+  "timestamp": "2026-04-21T20:12:16.572038",
+  "n_trials_total": 100,
+  "context_hash": "47e92f3adbeb",
+  "data_file": "/home/thelya/Work/CFST_Alchemy_Lab/cfst_predictitor/data/processed/final_feature_parameters_raw.csv",
+  "study_name": "xgboost_optimization__final_feature_parameters_raw__47e92f3adbeb__c779d232b6",
+  "storage_url": "sqlite:///logs/experiments/boxcox_scan/B6_boxcox_1_00_optuna.db"
+}

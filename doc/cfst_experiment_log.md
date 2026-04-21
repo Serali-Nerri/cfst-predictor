@@ -668,9 +668,9 @@ Test 指标：
    - 降低 `COV`
    - 或两者同时改善
 
-### 12.6 当前已完成的部分结果（B4）
+### 12.6 当前结果汇总（B4 已补完）
 
-> 说明：本轮 Box-Cox 扫描在执行过程中被用户主动中止，因此目前只有 `B4` 的前 4 个点已完成；`B4_boxcox_1.00` 未完成，`B6` 五组尚未开始。
+> 说明：`B4_boxcox_1.00` 已于 2026-04-21 补跑完成；`B6` 五组尚未开始，下一步按串行方式继续执行。
 
 | Group | Target transform | R² | COV | μ | a20-index | RMSE | MAE |
 |---|---|---:|---:|---:|---:|---:|---:|
@@ -678,21 +678,302 @@ Test 指标：
 | B4 | `boxcox_0.25` | 0.9781 | 0.1407 | 1.0130 | 0.9393 | 531.81 | 158.89 |
 | B4 | `boxcox_0.50` | 0.9866 | 0.1652 | 1.0151 | 0.9382 | 416.09 | 150.23 |
 | B4 | `boxcox_0.75` | 0.9835 | 0.1804 | 1.0172 | 0.9376 | 461.86 | 149.55 |
+| B4 | `boxcox_1.00` | 0.9811 | 0.1996 | 1.0196 | 0.9317 | 493.92 | 152.36 |
 
-### 12.7 当前阶段性判断
+`B4_boxcox_1.00` 关键运行记录：
 
-基于目前已完成的 `B4` 扫描结果，可先形成如下中间判断：
+- 配置文件：`config/experiments/boxcox_scan/B4_boxcox_1_00.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B4_boxcox_1_00_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B4_boxcox_1_00_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B4_boxcox_1_00_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B4_boxcox_1_00_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/baly78y3o.output`
 
-1. **`log` 仍然是当前最均衡的目标变换点**
-   - 在已完成的 4 个点中，`log` 的 `COV` 最低（0.1363）
-   - `μ` 也最接近 1
+`B4_boxcox_1.00` 补充指标：
+
+- CV：`J = 6.2998`，`RMSE = 456.81`，`MAE = 148.52`，`R² = 0.9718`，`μ = 1.0187`，`COV = 0.2219`，`a20-index = 0.9248`
+- Train：`RMSE = 125.24`，`MAE = 51.17`，`R² = 0.9979`，`μ = 1.0043`，`COV = 0.0699`，`a20-index = 0.9891`
+- Test：`RMSE = 493.92`，`MAE = 152.36`，`R² = 0.9811`，`μ = 1.0196`，`COV = 0.1996`，`a20-index = 0.9317`
+- Final `n_estimators = 1207`
+- Optuna trial 进度：`79 -> 179`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 3.94`，为当前 B4 扫描中最明显的过拟合点之一
+
+### 12.7 当前阶段性判断（B4 全扫描完成后）
+
+基于当前已经补完的 `B4` 五个点结果，可形成如下判断：
+
+1. **`log` 仍然是 B4 路线下最均衡的目标变换点**
+   - 在五个点中，`log` 的 `COV` 最低（0.1363）
+   - `μ` 也最接近 1（1.0103）
    - 虽然 `R²` 不是最高，但整体折中最好
 
-2. **更大的 Box-Cox λ 值会把模型推向更高的拟合精度，但会明显破坏比例稳定性**
-   - `boxcox_0.50` 把 `R²` 提升到了 0.9866，`RMSE` 也最低
-   - 但 `COV` 升高到 0.1652
-   - `boxcox_0.75` 的 `COV` 更进一步恶化到 0.1804
+2. **中等 λ 值仍然主要是在用更高 `R² / 更低 RMSE` 换更差的比例稳定性**
+   - `boxcox_0.50` 取得了 B4 路线下最高 `R² = 0.9866` 与最低 `RMSE = 416.09`
+   - 但其 `COV = 0.1652`，明显差于 `log`
+   - `boxcox_0.75` 进一步把 `COV` 推高到 `0.1804`
 
-3. **目前尚未看到比 `log` 更优的 `R²-COV` 折中点**
-   - 当前 Box-Cox 中间点更像是在“用更高 `R² / 更低 RMSE` 换更差的 `COV / μ`”
-   - 至少从 `B4` 的已完成部分看，`log` 仍然是最稳健的参考端点
+3. **`boxcox_1.00` 明确不是 B4 路线下的可取折中点**
+   - 相比 `log`，`boxcox_1.00` 的 `R²` 从 `0.9849` 降到 `0.9811`
+   - `COV` 从 `0.1363` 恶化到 `0.1996`
+   - `μ` 从 `1.0103` 偏移到 `1.0196`
+   - `a20-index` 也从 `0.9399` 下降到 `0.9317`
+
+4. **B4 路线已经给出足够清晰的证据：当前不值得继续围绕 Box-Cox λ 本身深挖**
+   - `log` 是当前 B4 的稳健参考端点
+   - `boxcox_0.50` 可保留为“更高拟合但更差 COV”的典型对照点
+   - 其余更接近线性端的变换并未显示出进入下一阶段主线的价值
+
+### 12.8 当前串行执行计划
+
+按用户要求，后续实验改为严格串行执行。下一步建议顺序为：
+
+1. `B6_log`
+2. `B6_boxcox_0.25`
+3. `B6_boxcox_0.50`
+4. `B6_boxcox_0.75`
+5. `B6_boxcox_1.00`
+
+这样可以在不并行占用资源的前提下，尽快判断：`B6` 是否也会复现与 `B4` 相同的 `R²-COV` 结构性拉扯。
+
+### 12.9 `B6_log` 串行补跑结果
+
+`B6_log` 已于 2026-04-21 串行完成，结果如下：
+
+- 配置文件：`config/experiments/boxcox_scan/B6_log.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B6_log_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B6_log_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B6_log_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B6_log_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/bomgra0va.output`
+
+核心指标：
+
+- CV：`J = 6.8051`，`RMSE = 525.00`，`MAE = 156.96`，`R² = 0.9626`，`μ = 1.0077`，`COV = 0.1536`，`a20-index = 0.9318`
+- Train：`RMSE = 152.33`，`MAE = 62.14`，`R² = 0.9969`，`μ = 1.0016`，`COV = 0.0601`，`a20-index = 0.9893`
+- Test：`RMSE = 447.48`，`MAE = 154.94`，`R² = 0.9845`，`μ = 1.0102`，`COV = 0.1386`，`a20-index = 0.9417`
+- Final `n_estimators = 1261`
+- Optuna trial 进度：`24 -> 124`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 2.94`
+
+与当前 `B4_log` 对照：
+
+- `B6_log` 的 `R²` 略低于 `B4_log`（`0.9845 < 0.9849`）
+- `B6_log` 的 `COV` 略高于 `B4_log`（`0.1386 > 0.1363`）
+- `μ` 两者几乎相同（`1.0102` vs `1.0103`）
+- `a20-index` 则是 `B6_log` 略优（`0.9417 > 0.9399`）
+
+当前判断：
+
+1. **`B6_log` 没有形成对 `B4_log` 的明确统治**
+   - `r0/h` 的加入并没有让 `B6` 在 `R²` 与 `COV` 上同时超过 `B4`
+   - 目前更像是用极小幅度的 `a20-index` 收益，换来略差的 `RMSE / R² / COV`
+
+2. **`B6` 路线依然值得继续扫 Box-Cox，但当前 `log` 端点并未显示出结构性突破**
+   - 这说明 `B6` 的意义仍然更接近“更强拟合上限组/对照组”
+   - 是否真的优于 `B4`，还要看 `boxcox_0.25 / 0.50 / 0.75 / 1.00` 的完整曲线
+
+3. **当前证据继续支持：仅靠 target transform 端点切换，不足以解决 `R²-COV` 的结构性拉扯**
+   - `B4_boxcox_1.00` 已经给出明显反证
+   - `B6_log` 也没有直接把 `COV` 压进更优区间
+
+### 12.10 `B6_boxcox_0.25` 串行补跑结果
+
+`B6_boxcox_0.25` 已于 2026-04-21 串行完成，结果如下：
+
+- 配置文件：`config/experiments/boxcox_scan/B6_boxcox_0_25.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B6_boxcox_0_25_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B6_boxcox_0_25_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B6_boxcox_0_25_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B6_boxcox_0_25_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/bskhkvqzc.output`
+
+核心指标：
+
+- CV：`J = 6.0652`，`RMSE = 491.51`，`MAE = 150.31`，`R² = 0.9671`，`μ = 1.0106`，`COV = 0.1622`，`a20-index = 0.9351`
+- Train：`RMSE = 141.54`，`MAE = 59.46`，`R² = 0.9973`，`μ = 1.0025`，`COV = 0.0609`，`a20-index = 0.9892`
+- Test：`RMSE = 424.70`，`MAE = 147.77`，`R² = 0.9860`，`μ = 1.0133`，`COV = 0.1441`，`a20-index = 0.9411`
+- Final `n_estimators = 1258`
+- Optuna trial 进度：`0 -> 100`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 3.00`
+
+与 `B6_log` 对照：
+
+- `R²` 从 `0.9845` 提升到 `0.9860`
+- `RMSE` 从 `447.48` 降到 `424.70`
+- 但 `COV` 从 `0.1386` 恶化到 `0.1441`
+- `μ` 从 `1.0102` 偏移到 `1.0133`
+- `a20-index` 基本持平并略降（`0.9417 -> 0.9411`）
+
+当前判断：
+
+1. **`B6_boxcox_0.25` 延续了与 B4 相同的结构性模式：更高 `R² / 更低 RMSE`，但更差 `COV`**
+   - 这说明 `boxcox_0.25` 仍然没有改变当前主矛盾
+   - 它只是把模型推向更强调拟合优度的方向
+
+2. **到目前为止，`B6` 路线还没有出现比 `B6_log` 更优的均衡点**
+   - `boxcox_0.25` 虽然在 `R²` 上超过了 `log`
+   - 但 `COV / μ / a20-index` 并没有同步改善
+
+3. **`B6` 正在复现 B4 的同类规律**
+   - 如果后续 `boxcox_0.50 / 0.75 / 1.00` 继续沿这个方向发展
+   - 则可进一步确认：当前 Box-Cox 扫描的主要作用更接近于生成“高 `R²` 对照点”，而不是找到真正更均衡的主线
+
+### 12.11 `B6_boxcox_0.50` 串行补跑结果
+
+`B6_boxcox_0.50` 已于 2026-04-21 串行完成，结果如下：
+
+- 配置文件：`config/experiments/boxcox_scan/B6_boxcox_0_50.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B6_boxcox_0_50_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B6_boxcox_0_50_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B6_boxcox_0_50_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B6_boxcox_0_50_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/b49uk8isp.output`
+
+核心指标：
+
+- CV：`J = 6.0533`，`RMSE = 477.85`，`MAE = 147.13`，`R² = 0.9690`，`μ = 1.0130`，`COV = 0.1810`，`a20-index = 0.9348`
+- Train：`RMSE = 134.91`，`MAE = 54.86`，`R² = 0.9976`，`μ = 1.0032`，`COV = 0.0613`，`a20-index = 0.9893`
+- Test：`RMSE = 434.00`，`MAE = 145.83`，`R² = 0.9854`，`μ = 1.0153`，`COV = 0.1597`，`a20-index = 0.9446`
+- Final `n_estimators = 2350`
+- Optuna trial 进度：`0 -> 100`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 3.22`
+
+与 `B6_boxcox_0.25` 对照：
+
+- `R²` 从 `0.9860` 略降到 `0.9854`
+- `RMSE` 从 `424.70` 回升到 `434.00`
+- `COV` 从 `0.1441` 进一步恶化到 `0.1597`
+- `μ` 从 `1.0133` 继续偏移到 `1.0153`
+- `a20-index` 则略升到当前已完成 `B6` 路线中的最高值（`0.9446`）
+
+当前判断：
+
+1. **`B6_boxcox_0.50` 没有带来更优折中，反而继续放大了 `COV / μ` 代价**
+   - 这说明随着 λ 增大，`B6` 也在逐步走向“更差比例稳定性”的一侧
+   - 与 B4 的扫描趋势保持一致
+
+2. **当前已完成的 `B6` 三个点中，`log` 仍然是最均衡点**
+   - `boxcox_0.25` 给出更高 `R²`
+   - `boxcox_0.50` 给出更高 `a20-index`
+   - 但两者都没有同时改善 `COV / μ / R²`
+
+3. **`B6` 路线下，Box-Cox 中间点的主要价值正在变成“不同指标偏好的对照点”**
+   - `log`：当前最均衡
+   - `boxcox_0.25`：更高 `R² / 更低 RMSE`
+   - `boxcox_0.50`：更高 `a20-index`
+   - 但尚未出现真正能同时改善主要指标的点
+
+下一步按串行继续：`B6_boxcox_0.75`
+
+### 12.12 `B6_boxcox_0.75` 串行补跑结果
+
+`B6_boxcox_0.75` 已于 2026-04-21 串行完成，结果如下：
+
+- 配置文件：`config/experiments/boxcox_scan/B6_boxcox_0_75.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B6_boxcox_0_75_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B6_boxcox_0_75_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B6_boxcox_0_75_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B6_boxcox_0_75_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/baywi88kf.output`
+
+核心指标：
+
+- CV：`J = 6.4143`，`RMSE = 477.09`，`MAE = 147.48`，`R² = 0.9693`，`μ = 1.0158`，`COV = 0.2018`，`a20-index = 0.9323`
+- Train：`RMSE = 126.79`，`MAE = 53.28`，`R² = 0.9979`，`μ = 1.0039`，`COV = 0.0653`，`a20-index = 0.9892`
+- Test：`RMSE = 428.39`，`MAE = 143.76`，`R² = 0.9858`，`μ = 1.0168`，`COV = 0.1754`，`a20-index = 0.9399`
+- Final `n_estimators = 2255`
+- Optuna trial 进度：`0 -> 100`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 3.38`
+
+与 `B6_boxcox_0.50` 对照：
+
+- `R²` 从 `0.9854` 小幅回升到 `0.9858`
+- `RMSE` 从 `434.00` 降到 `428.39`
+- 但 `COV` 从 `0.1597` 进一步恶化到 `0.1754`
+- `μ` 从 `1.0153` 继续偏移到 `1.0168`
+- `a20-index` 从 `0.9446` 回落到 `0.9399`
+
+当前判断：
+
+1. **`B6_boxcox_0.75` 仍然没有形成比 `B6_log` 更优的均衡点**
+   - 虽然 `RMSE` 继续低于 `log`
+   - 但 `COV / μ / a20-index` 并未同步改善
+
+2. **随着 λ 从 `0.25 -> 0.75` 增大，`B6` 路线的 `COV / μ` 正持续恶化**
+   - `boxcox_0.25`：`COV = 0.1441`
+   - `boxcox_0.50`：`COV = 0.1597`
+   - `boxcox_0.75`：`COV = 0.1754`
+   - 而 `R²` 并没有同步形成持续上升趋势
+
+3. **当前证据进一步支持：`B6_log` 仍是 B6 路线下最均衡的目标变换点**
+   - 中间 λ 点更多是在提供不同指标偏好的对照点
+   - 而不是给出真正同时改善 `R² / COV / μ` 的新主线
+
+下一步按串行继续：`B6_boxcox_1.00`
+
+### 12.13 `B6_boxcox_1.00` 串行补跑结果
+
+`B6_boxcox_1.00` 已于 2026-04-21 串行完成，结果如下：
+
+- 配置文件：`config/experiments/boxcox_scan/B6_boxcox_1_00.yaml`
+- 输出目录：`output/experiments/boxcox_scan/B6_boxcox_1_00_optuna100/`
+- 评估报告：`output/experiments/boxcox_scan/B6_boxcox_1_00_optuna100/evaluation_report.json`
+- Optuna study：`logs/experiments/boxcox_scan/B6_boxcox_1_00_optuna.db`
+- 最优参数：`logs/experiments/boxcox_scan/B6_boxcox_1_00_best_params.json`
+- 关键训练日志：`/tmp/claude-1001/-home-thelya-Work-CFST-Alchemy-Lab-cfst-predictitor/5dc17af7-055c-4574-a69c-4a1ea48ca13f/tasks/br4qt5vss.output`
+
+核心指标：
+
+- CV：`J = 6.4610`，`RMSE = 459.16`，`MAE = 152.05`，`R² = 0.9716`，`μ = 1.0189`，`COV = 0.2271`，`a20-index = 0.9215`
+- Train：`RMSE = 140.55`，`MAE = 60.47`，`R² = 0.9974`，`μ = 1.0054`，`COV = 0.0802`，`a20-index = 0.9864`
+- Test：`RMSE = 460.89`，`MAE = 154.17`，`R² = 0.9835`，`μ = 1.0185`，`COV = 0.1989`，`a20-index = 0.9317`
+- Final `n_estimators = 1493`
+- Optuna trial 进度：`0 -> 100`
+- 过拟合检查：原始空间 `RMSE(train/test) ratio = 3.28`
+
+与 `B6_boxcox_0.75` 对照：
+
+- `R²` 从 `0.9858` 下降到 `0.9835`
+- `RMSE` 从 `428.39` 回升到 `460.89`
+- `COV` 从 `0.1754` 进一步恶化到 `0.1989`
+- `μ` 从 `1.0168` 继续偏移到 `1.0185`
+- `a20-index` 从 `0.9399` 继续下降到 `0.9317`
+
+当前判断：
+
+1. **`B6_boxcox_1.00` 明确不是 B6 路线下可取的折中点**
+   - 它几乎沿着与 `B4_boxcox_1.00` 相同的方向恶化
+   - `R² / RMSE / COV / μ / a20-index` 没有任何一项形成对 `log` 的综合优势
+
+2. **B6 全扫描已经给出清晰结论：`log` 仍然是最均衡点**
+   - `log`：当前最均衡，`COV` 最低（0.1386），`μ` 也最接近 1（1.0102）
+   - `boxcox_0.25`：更高 `R²`、更低 `RMSE`
+   - `boxcox_0.50`：更高 `a20-index`
+   - `0.75 / 1.00`：进一步放大 `COV / μ` 代价，已不具备主线价值
+
+3. **B6 与 B4 共同支持同一结论：当前 Box-Cox 扫描主要在生成“不同指标偏好的对照点”，而不是新的主线突破**
+   - 两条路线都没有找到同时改善 `R² / COV / μ` 的中间 λ
+   - 越接近线性端，比例稳定性恶化越明显
+   - 当前阶段更值得继续的方向，应该转向计划中尚未实现的 `log + smearing`，或进入后续 Stage-B 主干对比，而不是继续深挖 λ 本身
+
+### 12.14 当前阶段性结论（B4 / B6 Box-Cox 全扫描完成后）
+
+截至 2026-04-21，`B4` 与 `B6` 的五点 Box-Cox 扫描均已补完，可形成当前阶段统一判断：
+
+1. **`log` 是当前两条紧凑主线下最稳定、最均衡的 target transform**
+   - `B4_log`：`R² = 0.9849`，`COV = 0.1363`，`μ = 1.0103`
+   - `B6_log`：`R² = 0.9845`，`COV = 0.1386`，`μ = 1.0102`
+
+2. **中间 Box-Cox λ 点的收益具有明显“单指标偏置”**
+   - 某些点可带来更高 `R²` 或更低 `RMSE`
+   - 某些点可带来略高 `a20-index`
+   - 但没有任何一个点能同时压低 `COV` 并保持更优 `μ`
+
+3. **越向线性端移动，`COV / μ` 恶化越明显**
+   - `B4_boxcox_1.00` 与 `B6_boxcox_1.00` 都已给出明确反证
+   - 说明当前问题并不只是 target transform 端点选得不对，而更像是误差结构本身尚未被当前主线充分吸收
+
+4. **下一阶段不建议继续围绕 λ 做更多细化扫描**
+   - 当前更值得投入的方向是：
+     - `log + smearing` 路线验证
+     - 或按计划进入 Stage-B，冻结共享 protocol 后做多 backbone 对照
