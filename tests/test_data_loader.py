@@ -56,6 +56,21 @@ def test_load_data_without_transform_returns_original_target(tmp_path):
     )
 
 
+def test_load_data_applies_boxcox_transform(tmp_path):
+    csv_path = tmp_path / "data.csv"
+    df = pd.DataFrame({
+        "feat": [1.0, 2.0, 3.0],
+        "Nexp (kN)": [4.0, 9.0, 16.0],
+    })
+    df.to_csv(csv_path, index=False)
+
+    loader = DataLoader(required_columns=["Nexp (kN)"])
+    _, target = loader.load_data(str(csv_path), "Nexp (kN)", target_transform="boxcox_0.5")
+
+    expected = (np.sqrt(df["Nexp (kN)"].to_numpy(dtype=float)) - 1.0) / 0.5
+    assert np.allclose(target.to_numpy(dtype=float), expected)
+
+
 def test_load_data_rejects_invalid_log_target_domain(tmp_path):
     csv_path = tmp_path / "data.csv"
     pd.DataFrame({"feat": [1.0, 2.0], "Nexp (kN)": [0.0, 10.0]}).to_csv(csv_path, index=False)

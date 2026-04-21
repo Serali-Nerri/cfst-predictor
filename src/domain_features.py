@@ -72,6 +72,31 @@ def get_training_target_name(
     return report_target_column
 
 
+def parse_boxcox_lambda(target_transform_type: str) -> Optional[float]:
+    normalized = target_transform_type.strip().lower()
+    if not normalized.startswith("boxcox_"):
+        return None
+    try:
+        return float(normalized.split("_", 1)[1])
+    except ValueError as exc:
+        raise ValueError(f"Unsupported target transform '{target_transform_type}'") from exc
+
+
+def format_target_transform_label(
+    target_name: str,
+    target_transform_type: Optional[str],
+) -> str:
+    if target_transform_type is None:
+        return target_name
+    normalized = target_transform_type.strip().lower()
+    if normalized == "log":
+        return f"ln({target_name})"
+    boxcox_lambda = parse_boxcox_lambda(normalized)
+    if boxcox_lambda is not None:
+        return f"BoxCox({target_name}; λ={boxcox_lambda:g})"
+    raise ValueError(f"Unsupported target transform '{target_transform_type}'")
+
+
 def apply_target_transform(
     values: Union[pd.Series, np.ndarray],
     target_transform_type: Optional[str],
@@ -80,10 +105,18 @@ def apply_target_transform(
     series = pd.Series(np.asarray(values, dtype=float).reshape(-1))
     if target_transform_type is None:
         return series
+    if (~np.isfinite(series)).any() or (series <= 0).any():
+        raise ValueError(
+            f"{target_transform_type} target transform requires all target values to be finite and > 0"
+        )
     if target_transform_type == "log":
-        if (~np.isfinite(series)).any() or (series <= 0).any():
-            raise ValueError("log target transform requires all target values to be finite and > 0")
         return pd.Series(np.log(series), index=series.index)
+    boxcox_lambda = parse_boxcox_lambda(target_transform_type)
+    if boxcox_lambda is not None:
+        if abs(boxcox_lambda) < 1e-12:
+            return pd.Series(np.log(series), index=series.index)
+        transformed = (np.power(series, boxcox_lambda) - 1.0) / boxcox_lambda
+        return pd.Series(transformed, index=series.index)
     raise ValueError(f"Unsupported target transform '{target_transform_type}'")
 
 
@@ -97,6 +130,14 @@ def inverse_target_transform(
         return array
     if target_transform_type == "log":
         return np.exp(array)
+    boxcox_lambda = parse_boxcox_lambda(target_transform_type)
+    if boxcox_lambda is not None:
+        if abs(boxcox_lambda) < 1e-12:
+            return np.exp(array)
+        base = boxcox_lambda * array + 1.0
+        base = np.where(np.isfinite(base), base, np.nan)
+        base = np.maximum(base, 1e-12)
+        return np.power(base, 1.0 / boxcox_lambda)
     raise ValueError(f"Unsupported target transform '{target_transform_type}'")
 
 

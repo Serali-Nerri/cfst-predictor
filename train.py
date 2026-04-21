@@ -32,6 +32,7 @@ from src.domain_features import (
     NPL_COLUMN,
     TARGET_MODE_RAW,
     apply_target_transform,
+    format_target_transform_label,
     get_keml_config_payload,
     get_training_target_name,
     normalize_target_mode,
@@ -245,10 +246,8 @@ def format_target_space_description(
 ) -> str:
     """Describe the target space used by fitting and reporting."""
     target_name = get_training_target_name(report_target_column, target_mode)
-    if target_transform_type == "log":
-        return f"ln({target_name}) -> inverse -> {report_target_column}"
     if target_transform_type is not None:
-        raise ValueError(f"Unsupported target transform '{target_transform_type}'")
+        return f"{format_target_transform_label(target_name, target_transform_type)} -> inverse -> {report_target_column}"
     if target_name != report_target_column:
         return f"{target_name} -> {report_target_column}"
     return report_target_column
@@ -261,10 +260,8 @@ def format_training_space_label(
 ) -> str:
     """Human-readable label for the model output space."""
     target_name = get_training_target_name(report_target_column, target_mode)
-    if target_transform_type == "log":
-        return f"ln({target_name}) space"
     if target_transform_type is not None:
-        raise ValueError(f"Unsupported target transform '{target_transform_type}'")
+        return f"{format_target_transform_label(target_name, target_transform_type)} space"
     return target_name
 
 
@@ -398,6 +395,78 @@ def build_sample_weights(
         "n_base_weight": int((~high_mask).sum()),
     }
     return weights, metadata
+
+
+def split_training_data(
+    *,
+    features: pd.DataFrame,
+    target_transformed: pd.Series,
+    report_target_raw: pd.Series,
+    training_target_raw: pd.Series,
+    test_size: float,
+    random_state: int,
+    stratify_labels_full: Optional[pd.Series],
+    sample_weight_full: Optional[pd.Series],
+) -> Tuple[
+    pd.DataFrame,
+    pd.DataFrame,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    pd.Series,
+    Optional[pd.Series],
+    Optional[pd.Series],
+    Optional[pd.Series],
+]:
+    split_kwargs: Dict[str, Any] = {
+        "test_size": test_size,
+        "random_state": random_state,
+    }
+    split_inputs: List[Any] = [
+        features,
+        target_transformed,
+        report_target_raw,
+        training_target_raw,
+    ]
+    if stratify_labels_full is not None:
+        split_kwargs["stratify"] = stratify_labels_full
+        split_inputs.append(stratify_labels_full)
+    if sample_weight_full is not None:
+        split_inputs.append(sample_weight_full)
+
+    split_result = train_test_split(*split_inputs, **split_kwargs)
+    result_index = 0
+
+    X_train_full, X_test = cast(Tuple[pd.DataFrame, pd.DataFrame], tuple(split_result[result_index:result_index + 2]))
+    result_index += 2
+    y_train_trans_full, y_test_trans = cast(Tuple[pd.Series, pd.Series], tuple(split_result[result_index:result_index + 2]))
+    result_index += 2
+    y_train_report_full, y_test_report = cast(Tuple[pd.Series, pd.Series], tuple(split_result[result_index:result_index + 2]))
+    result_index += 2
+    _, _ = cast(Tuple[pd.Series, pd.Series], tuple(split_result[result_index:result_index + 2]))
+    result_index += 2
+
+    train_strata_full: Optional[pd.Series] = None
+    test_strata: Optional[pd.Series] = None
+    if stratify_labels_full is not None:
+        train_strata_full, test_strata = cast(Tuple[pd.Series, pd.Series], tuple(split_result[result_index:result_index + 2]))
+        result_index += 2
+
+    sample_weight_train_full: Optional[pd.Series] = None
+    if sample_weight_full is not None:
+        sample_weight_train_full, _ = cast(Tuple[pd.Series, pd.Series], tuple(split_result[result_index:result_index + 2]))
+
+    return (
+        X_train_full,
+        X_test,
+        y_train_trans_full,
+        y_test_trans,
+        y_train_report_full,
+        y_test_report,
+        train_strata_full,
+        test_strata,
+        sample_weight_train_full,
+    )
 
 
 def make_common_artifact_payload(
@@ -699,88 +768,26 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
                     "falling back to random split"
                 )
 
-        split_kwargs: Dict[str, Any] = {
-            "test_size": test_size,
-            "random_state": random_state,
-        }
-        if stratify_labels_full is not None:
-            split_kwargs["stratify"] = stratify_labels_full
-            split_result = cast(
-                Tuple[
-                    pd.DataFrame,
-                    pd.DataFrame,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    Optional[pd.Series],
-                    Optional[pd.Series],
-                ],
-                train_test_split(
-                    features,
-                    target_transformed,
-                    report_target_raw,
-                    training_target_raw,
-                    stratify_labels_full,
-                    sample_weight_full,
-                    **split_kwargs,
-                ),
-            )
-            (
-                X_train_full,
-                X_test,
-                y_train_trans_full,
-                y_test_trans,
-                y_train_report_full,
-                y_test_report,
-                _,
-                _,
-                train_strata_full,
-                test_strata,
-                sample_weight_train_full,
-                _,
-            ) = split_result
-        else:
-            split_result = cast(
-                Tuple[
-                    pd.DataFrame,
-                    pd.DataFrame,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    pd.Series,
-                    Optional[pd.Series],
-                    Optional[pd.Series],
-                ],
-                train_test_split(
-                    features,
-                    target_transformed,
-                    report_target_raw,
-                    training_target_raw,
-                    sample_weight_full,
-                    **split_kwargs,
-                ),
-            )
-            (
-                X_train_full,
-                X_test,
-                y_train_trans_full,
-                y_test_trans,
-                y_train_report_full,
-                y_test_report,
-                _,
-                _,
-                sample_weight_train_full,
-                _,
-            ) = split_result
-            train_strata_full = None
-            test_strata = None
+        (
+            X_train_full,
+            X_test,
+            y_train_trans_full,
+            y_test_trans,
+            y_train_report_full,
+            y_test_report,
+            train_strata_full,
+            test_strata,
+            sample_weight_train_full,
+        ) = split_training_data(
+            features=features,
+            target_transformed=target_transformed,
+            report_target_raw=report_target_raw,
+            training_target_raw=training_target_raw,
+            test_size=float(test_size),
+            random_state=int(random_state),
+            stratify_labels_full=stratify_labels_full,
+            sample_weight_full=sample_weight_full,
+        )
 
         effective_split_strategy = (
             "regression_stratified" if train_strata_full is not None else "random"

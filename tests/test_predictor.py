@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -94,6 +92,67 @@ def test_predict_restores_nexp_for_eta_u_target_with_precomputed_npl_input():
     predictions = predictor.predict(X)
 
     assert np.allclose(predictions, np.array([304.0, 379.2]))
+
+
+def test_predict_restores_nexp_for_eta_u_target_with_boxcox_input():
+    predictor = Predictor(
+        model=ConstantModel((np.sqrt(0.8) - 1.0) / 0.5),
+        feature_names=["As (mm^2)", "Ac (mm^2)", "fy (MPa)", "fc (MPa)", "Npl (kN)"],
+        metadata={
+            "target_mode": "eta_u_over_npl",
+            "report_target_column": "Nexp (kN)",
+            "target_transform": {
+                "enabled": True,
+                "type": "boxcox_0.5",
+                "mode": "eta_u_over_npl",
+                "original_column": "Nexp (kN)",
+            },
+        },
+    )
+    X = pd.DataFrame(
+        {
+            "As (mm^2)": [1000.0, 1200.0],
+            "Ac (mm^2)": [2000.0, 1800.0],
+            "fy (MPa)": [300.0, 320.0],
+            "fc (MPa)": [40.0, 50.0],
+            "Npl (kN)": [380.0, 474.0],
+        }
+    )
+
+    predictions = predictor.predict(X)
+
+    assert np.allclose(predictions, np.array([304.0, 379.2]))
+
+
+def test_predict_boxcox_inverse_clamps_domain_floor():
+    predictor = Predictor(
+        model=ConstantModel(-3.0),
+        feature_names=["As (mm^2)", "Ac (mm^2)", "fy (MPa)", "fc (MPa)", "Npl (kN)"],
+        metadata={
+            "target_mode": "eta_u_over_npl",
+            "report_target_column": "Nexp (kN)",
+            "target_transform": {
+                "enabled": True,
+                "type": "boxcox_0.50",
+                "mode": "eta_u_over_npl",
+                "original_column": "Nexp (kN)",
+            },
+        },
+    )
+    X = pd.DataFrame(
+        {
+            "As (mm^2)": [1000.0],
+            "Ac (mm^2)": [2000.0],
+            "fy (MPa)": [300.0],
+            "fc (MPa)": [40.0],
+            "Npl (kN)": [380.0],
+        }
+    )
+
+    predictions = predictor.predict(X)
+
+    assert np.isfinite(predictions[0])
+    assert predictions[0] > 0.0
 
 
 def test_predict_restores_nexp_for_r_target_with_precomputed_npl_input():
