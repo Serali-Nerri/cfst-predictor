@@ -11,7 +11,7 @@
 - `python -m venv .venv && source .venv/bin/activate`: create and activate a local environment.
 - `pip install -r requirements.txt`: install runtime dependencies.
 - `python train.py --config config/config.yaml`: run the default `eta_u_over_npl + log` + KeML mainline and export artifacts to `output/eta_u_over_npl_log_original_default_optuna100`.
-- `python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/raw/all.csv --output output/predictions.csv`: run batch prediction with the current default saved model.
+- `python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv`: run batch prediction with the current default saved model.
 - `pyright`: run static type checking (configured by `pyrightconfig.json`).
 
 ## Coding Style & Naming Conventions
