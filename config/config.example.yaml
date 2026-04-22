@@ -5,6 +5,8 @@
 # - Box-Cox 目标变换当前仅作为实验支持，不代表已经纳入正式主线
 # - predict.py 主要依赖模型目录中的 training_metadata.json，而不是直接读取本 YAML
 # - 当前 train.py 真正从 paths 中读取的只有 output_dir；其余产物文件名由代码固定
+# - model.params 是 XGBoost 的基础参数入口；当 use_optuna: false 且 best_params_path 中存在 context_hash 匹配的历史快照时，训练会优先复用该快照覆盖基础参数
+# - validation_size / early_stopping_rounds / eval_metric 当前只用于 CV / Optuna 的折内验证与选模，不用于最终 full-train refit
 
 # =========================
 # 1. 数据与目标配置
@@ -32,7 +34,7 @@ data:
     # 默认主线仍建议保持 log
     type: "log"
 
-  # 训练前要从输入中剔除的列
+  # 训练前要从输入中显式剔除的列；其余非数值/非布尔列也会在预处理阶段自动剔除
   columns_to_drop:
     - "b (mm)"
     - "h (mm)"
@@ -55,12 +57,14 @@ data:
     high_weight: 1.5
 
   # 训练 / 测试集划分策略
+  # 当前支持 regression_stratified；若稳定分层不足，代码会自动回退到 random split
   split:
     strategy: "regression_stratified"
     target_bins: 10
     auxiliary_features:
       - column: "lambda_bar"
         bins: 3
+    # 这是用户给定的下限；代码还会结合 test_size / validation_size / CV folds 自动抬高最低样本要求
     min_stratum_size: 12
 
 # =========================
@@ -68,7 +72,7 @@ data:
 # =========================
 model:
   params:
-    # 当前 train.py 约束只从这里读取 XGBoost 参数
+    # 当前 train.py 只接受这里作为 XGBoost 基础参数入口；Optuna 搜索空间也围绕这些值展开
     objective: "reg:squarederror"
     max_depth: 5
     learning_rate: 0.0451669400461485
@@ -93,13 +97,16 @@ model:
   n_trials: 100
   optuna_timeout: 14400
   optuna_storage_url: "sqlite:///logs/optuna_study.db"
+  # use_optuna: false 时，这个路径也会作为“历史最优参数快照”的加载入口
   best_params_path: "logs/best_params.json"
 
+  # 以下三项当前只用于 CV / Optuna 的折内验证与 early stopping，不用于最终 full-train refit
   early_stopping_rounds: 100
   eval_metric: "rmse"
   validation_size: 0.15
 
-  # 当前选模目标实际依赖 RMSE / R² / COV 的组合；metric_space 建议保持 original_nexp
+  # 当前选模目标实际依赖 RMSE / R² / COV 的组合；score 基于 reported target 空间计算
+  # metric_space 字段当前主要起语义标记作用，建议保持 original_nexp
   selection_objective:
     metric_space: "original_nexp"
     rmse_normalizer: "mean_actual"
@@ -137,6 +144,7 @@ cv:
 evaluation:
   regime_analysis:
     enabled: true
+    # 当前代码只支持 train 作为参考分割；其他值会直接报错
     reference_split: "train"
     sort_metric: "cov"
     regimes:
