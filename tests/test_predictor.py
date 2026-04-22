@@ -1,7 +1,10 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 
+from predict import _load_model_metadata
 from src.predictor import Predictor, compare_predictions, export_predictions
 
 
@@ -200,3 +203,16 @@ def test_compare_predictions_rejects_row_count_mismatch(tmp_path):
 
     with pytest.raises(ValueError, match="same number of rows"):
         compare_predictions(str(actual_path), str(pred_path))
+
+
+def test_load_model_metadata_returns_empty_without_metadata():
+    assert _load_model_metadata(None) == {}
+
+
+
+def test_load_model_metadata_rejects_non_mapping_json(tmp_path):
+    metadata_path = tmp_path / "training_metadata.json"
+    metadata_path.write_text(json.dumps(["not", "an", "object"]), encoding="utf-8")
+
+    with pytest.raises(Exception, match="Metadata JSON root must be an object"):
+        _load_model_metadata(str(metadata_path))

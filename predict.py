@@ -17,15 +17,27 @@ import argparse
 import sys
 import traceback
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import pandas as pd
 
 from src.utils.logger import setup_logger
-from src.utils.model_utils import load_metadata, load_model_from_directory
+from src.utils.model_utils import (
+    DEFAULT_FEATURE_NAMES_NAME,
+    load_metadata,
+    load_model,
+    resolve_artifact_paths,
+)
 from src.predictor import Predictor, export_predictions
 
 logger = setup_logger(__name__)
+
+
+def _load_model_metadata(metadata_path: Optional[str]) -> dict[str, Any]:
+    """Load model metadata when the artifact exists."""
+    if metadata_path is None:
+        return {}
+    return load_metadata(metadata_path)
 
 
 def make_predictions(model_dir: str, input_data_path: str,
@@ -49,100 +61,96 @@ def make_predictions(model_dir: str, input_data_path: str,
     logger.info("CFST XGBOOST PIPELINE - PREDICTION STARTED")
     logger.info("=" * 80)
 
-    try:
-        # Step 1: Load model and artifacts
-        logger.info("Step 1: Loading model and artifacts...")
+    # Step 1: Load model and artifacts
+    logger.info("Step 1: Loading model and artifacts...")
 
-        if not Path(model_dir).exists():
-            error_msg = f"Model directory not found: {model_dir}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+    if not Path(model_dir).exists():
+        error_msg = f"Model directory not found: {model_dir}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
 
-        model, preprocessor, feature_names = load_model_from_directory(model_dir)
-        metadata_path = Path(model_dir) / "training_metadata.json"
-        metadata = load_metadata(str(metadata_path)) if metadata_path.exists() else {}
-        logger.info(f"Model loaded from {model_dir}")
-        logger.info(f"Feature names loaded: {len(feature_names) if feature_names else 0} features")
+    artifact_paths = resolve_artifact_paths(model_dir)
+    model_path = artifact_paths["model"]
+    feature_names_path = artifact_paths["feature_names"]
+    if model_path is None:
+        raise FileNotFoundError(f"Required model artifact not found under {model_dir}")
+    if feature_names_path is None:
+        raise FileNotFoundError(
+            f"Required feature names artifact not found under {model_dir}: {DEFAULT_FEATURE_NAMES_NAME}"
+        )
 
-        # Step 2: Load input data
-        logger.info("\nStep 2: Loading input data...")
+    model, preprocessor, feature_names = load_model(
+        model_path,
+        artifact_paths["preprocessor"],
+        feature_names_path,
+    )
+    metadata = _load_model_metadata(artifact_paths["metadata"])
+    logger.info(f"Model loaded from {model_dir}")
+    logger.info(f"Feature names loaded: {len(feature_names) if feature_names else 0} features")
 
-        if not Path(input_data_path).exists():
-            error_msg = f"Input data file not found: {input_data_path}"
-            logger.error(error_msg)
-            raise FileNotFoundError(error_msg)
+    # Step 2: Load input data
+    logger.info("\nStep 2: Loading input data...")
 
-        input_df = pd.read_csv(input_data_path)
-        logger.info(f"Input data loaded: {len(input_df)} samples, {len(input_df.columns)} features")
+    read_kwargs: dict[str, Any] = {}
+    if single:
+        read_kwargs["nrows"] = 1
+    input_df = pd.read_csv(input_data_path, **read_kwargs)
+    logger.info(f"Input data loaded: {len(input_df)} samples, {len(input_df.columns)} features")
 
-        # Step 3: Validate features
-        logger.info("\nStep 3: Validating features...")
-        logger.info("Deferring feature derivation/validation to Predictor")
+    # Step 3: Validate features
+    logger.info("\nStep 3: Validating features...")
+    logger.info("Deferring feature derivation/validation to Predictor")
 
-        # Step 4: Initialize predictor
-        logger.info("\nStep 4: Initializing predictor...")
-        predictor = Predictor(model, preprocessor, feature_names, metadata=metadata)
-        logger.info("Predictor initialized")
+    # Step 4: Initialize predictor
+    logger.info("\nStep 4: Initializing predictor...")
+    predictor = Predictor(model, preprocessor, feature_names, metadata=metadata)
+    logger.info("Predictor initialized")
 
-        # Step 5: Make predictions
-        logger.info("\nStep 5: Making predictions...")
+    # Step 5: Make predictions
+    logger.info("\nStep 5: Making predictions...")
 
-        if single:
-            # Single prediction
-            if len(input_df) != 1:
-                logger.warning(f"Single prediction mode but input has {len(input_df)} rows. Using first row.")
-                input_df = input_df.iloc[:1]
+    if single:
+        prediction = predictor.predict_single(input_df)
+        logger.info(f"Single prediction: {prediction:.4f}")
 
-            prediction = predictor.predict_single(input_df)
-            logger.info(f"Single prediction: {prediction:.4f}")
+        results_df = input_df.copy()
+        results_df['prediction'] = prediction
+    else:
+        logger.info(f"Making predictions for {len(input_df)} samples...")
+        predictions = predictor.predict(input_df)
 
-            # Create result DataFrame
-            results_df = input_df.copy()
-            results_df['prediction'] = prediction
+        results_df = input_df.copy()
+        results_df['prediction'] = predictions
 
-        else:
-            # Batch predictions
-            logger.info(f"Making predictions for {len(input_df)} samples...")
-            predictions = predictor.predict(input_df)
+        logger.info(f"Predictions completed: {len(predictions)} samples")
+        logger.info(f"Prediction statistics:")
+        logger.info(f"  Min: {predictions.min():.4f}")
+        logger.info(f"  Max: {predictions.max():.4f}")
+        logger.info(f"  Mean: {predictions.mean():.4f}")
+        logger.info(f"  Std: {predictions.std():.4f}")
 
-            # Create results DataFrame
-            results_df = input_df.copy()
-            results_df['prediction'] = predictions
+    # Step 6: Export predictions
+    if output_path:
+        logger.info("\nStep 6: Exporting predictions...")
+        export_predictions(results_df, results_df["prediction"].to_numpy(dtype=float), output_path)
+        logger.info(f"Predictions exported to {output_path}")
+    else:
+        logger.info("\nStep 6: Skipping export (no output path provided)")
 
-            logger.info(f"Predictions completed: {len(predictions)} samples")
-            logger.info(f"Prediction statistics:")
-            logger.info(f"  Min: {predictions.min():.4f}")
-            logger.info(f"  Max: {predictions.max():.4f}")
-            logger.info(f"  Mean: {predictions.mean():.4f}")
-            logger.info(f"  Std: {predictions.std():.4f}")
+    # Step 7: Final summary
+    logger.info("\n" + "=" * 80)
+    logger.info("PREDICTION COMPLETED SUCCESSFULLY")
+    logger.info("=" * 80)
 
-        # Step 6: Export predictions
-        if output_path:
-            logger.info("\nStep 6: Exporting predictions...")
-            export_predictions(input_df, predictions if not single else [prediction], output_path)
-            logger.info(f"Predictions exported to {output_path}")
-        else:
-            logger.info("\nStep 6: Skipping export (no output path provided)")
+    if not single:
+        logger.info(f"Total samples: {len(results_df)}")
+        logger.info(f"Predictions range: [{results_df['prediction'].min():.4f}, {results_df['prediction'].max():.4f}]")
+    else:
+        logger.info(f"Single prediction: {prediction:.4f}")
 
-        # Step 7: Final summary
-        logger.info("\n" + "=" * 80)
-        logger.info("PREDICTION COMPLETED SUCCESSFULLY")
-        logger.info("=" * 80)
+    logger.info("=" * 80)
 
-        if not single:
-            logger.info(f"Total samples: {len(results_df)}")
-            logger.info(f"Predictions range: [{results_df['prediction'].min():.4f}, {results_df['prediction'].max():.4f}]")
-        else:
-            logger.info(f"Single prediction: {prediction:.4f}")
-
-        logger.info("=" * 80)
-
-        return results_df
-
-    except Exception as e:
-        logger.error(f"Prediction failed: {str(e)}")
-        logger.error(traceback.format_exc())
-        raise
+    return results_df
 
 
 def main():
@@ -204,20 +212,6 @@ Examples:
     if not Path(args.model).exists():
         logger.error(f"Model directory not found: {args.model}")
         logger.error("Please check the directory path")
-        sys.exit(1)
-
-    # Check if required model files exist
-    required_files = ['xgboost_model.pkl', 'feature_names.json']
-    missing_files = []
-
-    for file in required_files:
-        file_path = Path(args.model) / file
-        if not file_path.exists():
-            missing_files.append(file)
-
-    if missing_files:
-        logger.error(f"Missing required files in model directory: {missing_files}")
-        logger.error("Please ensure the model directory contains all trained model files")
         sys.exit(1)
 
     # Check if input file exists
