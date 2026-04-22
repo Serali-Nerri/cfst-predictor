@@ -5,6 +5,7 @@
 # - Box-Cox 目标变换当前仅作为实验支持，不代表已经纳入正式主线
 # - predict.py 主要依赖模型目录中的 training_metadata.json，而不是直接读取本 YAML
 # - 当前 train.py 真正从 paths 中读取的只有 output_dir；其余产物文件名由代码固定
+# - model.backbone 默认 xgboost；旧配置不写该字段时会自动回退到 xgboost
 # - model.params 是 XGBoost 的基础参数入口；当 use_optuna: false 且 best_params_path 中存在 context_hash 匹配的历史快照时，训练会优先复用该快照覆盖基础参数
 # - validation_size / early_stopping_rounds / eval_metric 当前只用于 CV / Optuna 的折内验证与选模，不用于最终 full-train refit
 
@@ -71,6 +72,8 @@ data:
 # 2. 模型与调参配置
 # =========================
 model:
+  # 当前仅支持 xgboost；未配置时默认 xgboost（兼容旧配置）
+  backbone: "xgboost"
   params:
     # 当前 train.py 只接受这里作为 XGBoost 基础参数入口；Optuna 搜索空间也围绕这些值展开
     objective: "reg:squarederror"

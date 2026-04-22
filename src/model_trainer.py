@@ -1,13 +1,13 @@
 """
-Model Trainer Module for CFST XGBoost Pipeline
+Model trainer module for the CFST regression pipeline.
 
-This module handles XGBoost model training, cross-validation, and hyperparameter optimization.
+This module handles backbone-driven model training, cross-validation, and hyperparameter optimization.
 """
 
-import xgboost as xgb
 import numpy as np
 import pandas as pd
 from typing import Dict, Tuple, Optional, List, Any, Protocol, cast
+from src.backbones import resolve_backbone_adapter
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold, train_test_split
 from sklearn.pipeline import Pipeline
@@ -161,14 +161,15 @@ class KeMLRegressor:
 
 class ModelTrainer:
     """
-    Model trainer for CFST XGBoost pipeline.
+    Model trainer for the CFST regression pipeline.
 
-    Handles XGBoost model training, cross-validation, and optional hyperparameter optimization.
+    Handles backbone-driven model training, cross-validation, and optional hyperparameter optimization.
     """
 
     def __init__(
         self,
         params: Optional[Dict[str, Any]] = None,
+        backbone: str = "xgboost",
         use_optuna: bool = False,
         n_trials: int = 100,
         optuna_timeout: int = 3600,
@@ -190,7 +191,8 @@ class ModelTrainer:
         Initialize ModelTrainer.
 
         Args:
-            params: XGBoost parameters (defaults to reasonable values if None)
+            params: Backbone parameters (defaults to adapter values if None)
+            backbone: Backbone adapter name (default: xgboost)
             use_optuna: Whether to use Optuna for hyperparameter optimization
             n_trials: Number of Optuna trials for hyperparameter optimization
             optuna_timeout: Timeout for Optuna optimization in seconds
@@ -202,13 +204,15 @@ class ModelTrainer:
             columns_to_drop: Columns removed by the preprocessor
             validation_size: Fold-internal validation share used for early stopping
             early_stopping_rounds: Early stopping rounds for fold/internal validation
-            eval_metric: XGBoost eval metric used when validation is available
+            eval_metric: Eval metric used when validation is available
             selection_objective: Composite CV/Optuna selection objective in report space
             linear_feature_names: Feature subset used by the linear residual branch
             linear_ridge_alpha: Ridge alpha for the linear residual branch
             use_keml_residual_split: Whether to train linear + nonlinear residual branches
         """
-        self.params = params or self._get_default_params()
+        self.backbone = str(backbone or "xgboost").strip().lower()
+        self.backbone_adapter = resolve_backbone_adapter(self.backbone)
+        self.params = params or self.backbone_adapter.get_default_params()
         self.use_optuna = use_optuna
         self.n_trials = n_trials
         self.optuna_timeout = optuna_timeout
@@ -240,7 +244,11 @@ class ModelTrainer:
                 self.loaded_best_params = True
                 logger.info("Using loaded best parameters for training")
 
-        logger.info(f"ModelTrainer initialized with use_optuna={use_optuna}")
+        logger.info(
+            "ModelTrainer initialized with backbone=%s, use_optuna=%s",
+            self.backbone,
+            use_optuna,
+        )
         logger.info(
             "ModelTrainer metric setup: "
             f"optuna_metric_space={self.optuna_metric_space}, "
@@ -256,129 +264,20 @@ class ModelTrainer:
 
     @staticmethod
     def _get_default_params() -> Dict[str, Any]:
-        """
-        Get default XGBoost parameters.
-
-        Returns:
-            Dictionary of default parameters
-        """
-        return {
-            "objective": "reg:squarederror",
-            "max_depth": 6,
-            "learning_rate": 0.1,
-            "n_estimators": 200,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "random_state": 42,
-            "tree_method": "hist",
-            "device": "cpu",
-            "n_jobs": -1,  # Use all CPU cores
-        }
+        """Get default parameters for the default backbone."""
+        return resolve_backbone_adapter("xgboost").get_default_params()
 
     def get_optuna_center_point(self) -> Dict[str, Any]:
-        """
-        Return the current Optuna center point derived from model params.
-        """
-        return {
-            "max_depth": int(self.params.get("max_depth", 5)),
-            "learning_rate": float(self.params.get("learning_rate", 0.05)),
-            "n_estimators": int(self.params.get("n_estimators", 1200)),
-            "subsample": float(self.params.get("subsample", 0.8)),
-            "colsample_bytree": float(self.params.get("colsample_bytree", 0.75)),
-            "min_child_weight": int(self.params.get("min_child_weight", 10)),
-            "reg_alpha": float(self.params.get("reg_alpha", 0.5)),
-            "reg_lambda": float(self.params.get("reg_lambda", 2.0)),
-            "gamma": float(self.params.get("gamma", 0.05)),
-        }
+        """Return the current Optuna center point derived from model params."""
+        return self.backbone_adapter.get_optuna_center_point(self.params)
 
     def get_optuna_search_space(self) -> Dict[str, Dict[str, Any]]:
-        """
-        Build an Optuna search space centered on config.model.params.
-        """
-        center = self.get_optuna_center_point()
-
-        search_space: Dict[str, Dict[str, Any]] = {
-            "max_depth": {
-                "kind": "int",
-                "low": max(3, center["max_depth"] - 1),
-                "high": min(8, center["max_depth"] + 2),
-            },
-            "learning_rate": {
-                "kind": "float",
-                "low": max(0.01, center["learning_rate"] / 2.5),
-                "high": min(0.12, max(center["learning_rate"] * 1.8, 0.02)),
-                "log": True,
-            },
-            "n_estimators": {
-                "kind": "int",
-                "low": max(800, int(round(center["n_estimators"] * 0.6))),
-                "high": min(4500, int(round(center["n_estimators"] * 2.2))),
-            },
-            "subsample": {
-                "kind": "float",
-                "low": max(0.55, center["subsample"] - 0.18),
-                "high": min(0.98, center["subsample"] + 0.08),
-            },
-            "colsample_bytree": {
-                "kind": "float",
-                "low": max(0.4, center["colsample_bytree"] - 0.18),
-                "high": min(0.95, center["colsample_bytree"] + 0.12),
-            },
-            "min_child_weight": {
-                "kind": "int",
-                "low": max(4, int(round(center["min_child_weight"] * 0.6))),
-                "high": min(40, int(round(center["min_child_weight"] * 2.0))),
-            },
-            "reg_alpha": {
-                "kind": "float",
-                "low": max(1e-3, center["reg_alpha"] / 20.0),
-                "high": min(20.0, max(center["reg_alpha"] * 20.0, 1e-2)),
-                "log": True,
-            },
-            "reg_lambda": {
-                "kind": "float",
-                "low": max(1e-2, center["reg_lambda"] / 15.0),
-                "high": min(50.0, max(center["reg_lambda"] * 15.0, 0.1)),
-                "log": True,
-            },
-            "gamma": {
-                "kind": "float",
-                "low": max(1e-4, center["gamma"] / 30.0),
-                "high": min(5.0, max(center["gamma"] * 20.0, 1e-3)),
-                "log": True,
-            },
-        }
-
-        return search_space
+        """Build an Optuna search space centered on config.model.params."""
+        return self.backbone_adapter.get_optuna_search_space(self.params)
 
     def build_optuna_trial_params(self, trial: Trial) -> Dict[str, Any]:
-        """
-        Sample one Optuna trial from the centered search space.
-        """
-        search_space = self.get_optuna_search_space()
-        tuned_params: Dict[str, Any] = {}
-
-        for name, spec in search_space.items():
-            if spec["kind"] == "int":
-                tuned_params[name] = trial.suggest_int(
-                    name, int(spec["low"]), int(spec["high"])
-                )
-            else:
-                tuned_params[name] = trial.suggest_float(
-                    name,
-                    float(spec["low"]),
-                    float(spec["high"]),
-                    log=bool(spec.get("log", False)),
-                )
-
-        return {
-            "objective": self.params.get("objective", "reg:squarederror"),
-            **tuned_params,
-            "random_state": self.params.get("random_state", 42),
-            "tree_method": self.params.get("tree_method", "hist"),
-            "device": self.params.get("device", "cpu"),
-            "n_jobs": self.params.get("n_jobs", -1),
-        }
+        """Sample one Optuna trial from the centered search space."""
+        return self.backbone_adapter.build_optuna_trial_params(trial, self.params)
 
     def _get_active_linear_feature_names(self, X: pd.DataFrame) -> List[str]:
         if not self.linear_feature_names:
@@ -431,13 +330,7 @@ class ModelTrainer:
         sample_weight: Optional[pd.Series] = None,
         sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
-        """
-        Fit one XGBoost model using the same validation/early-stopping path as final training.
-        """
-        model_params = params.copy()
-        fit_kwargs: Dict[str, Any] = {"verbose": False}
-        sample_weight_numpy = self._to_float_numpy(sample_weight)
-        sample_weight_eval_numpy = self._to_float_numpy(sample_weight_eval_set)
+        """Fit one model using adapterized backbone behavior."""
         active_early_stopping_rounds = (
             early_stopping_rounds
             if early_stopping_rounds is not None
@@ -445,24 +338,6 @@ class ModelTrainer:
         )
         active_eval_metric = eval_metric if eval_metric is not None else self.eval_metric
 
-        if sample_weight_numpy is not None:
-            fit_kwargs["sample_weight"] = sample_weight_numpy
-
-        if X_val is not None and y_val is not None:
-            fit_kwargs["eval_set"] = [(X_val, y_val)]
-            if sample_weight_eval_numpy is not None:
-                fit_kwargs["sample_weight_eval_set"] = [sample_weight_eval_numpy]
-            if active_early_stopping_rounds is not None:
-                model_params["early_stopping_rounds"] = active_early_stopping_rounds
-        else:
-            model_params.pop("early_stopping_rounds", None)
-
-        if active_eval_metric is not None:
-            model_params["eval_metric"] = active_eval_metric
-        else:
-            model_params.pop("eval_metric", None)
-
-        model = xgb.XGBRegressor(**model_params)
         if self.use_keml_residual_split:
             active_linear_features = self._get_active_linear_feature_names(X_train)
             linear_model, linear_predictions_train = self._fit_linear_branch(
@@ -475,7 +350,8 @@ class ModelTrainer:
                 y_train.to_numpy(dtype=float) - linear_predictions_train,
                 index=y_train.index,
             )
-            residual_fit_kwargs: Dict[str, Any] = {"verbose": False}
+
+            residual_y_val: Optional[pd.Series] = None
             if X_val is not None and y_val is not None:
                 missing_linear_features = [
                     feature for feature in active_linear_features if feature not in X_val.columns
@@ -493,23 +369,37 @@ class ModelTrainer:
                     y_val.to_numpy(dtype=float) - linear_predictions_val,
                     index=y_val.index,
                 )
-                residual_fit_kwargs["eval_set"] = [(X_val, residual_y_val)]
-                if sample_weight_eval_numpy is not None:
-                    residual_fit_kwargs["sample_weight_eval_set"] = [sample_weight_eval_numpy]
-            if sample_weight_numpy is not None:
-                residual_fit_kwargs["sample_weight"] = sample_weight_numpy
-            model.fit(
-                X_train,
-                residual_y_train,
-                **residual_fit_kwargs,
+
+            nonlinear_model = self.backbone_adapter.fit(
+                params=params,
+                X_train=X_train,
+                y_train=residual_y_train,
+                X_val=X_val,
+                y_val=residual_y_val,
+                early_stopping_rounds=active_early_stopping_rounds,
+                eval_metric=active_eval_metric,
+                sample_weight=sample_weight,
+                sample_weight_eval_set=(
+                    sample_weight_eval_set if residual_y_val is not None else None
+                ),
             )
             return KeMLRegressor(
                 linear_model=linear_model,
-                nonlinear_model=model,
+                nonlinear_model=nonlinear_model,
                 linear_feature_names=active_linear_features,
             )
-        model.fit(X_train, y_train, **fit_kwargs)
-        return model
+
+        return self.backbone_adapter.fit(
+            params=params,
+            X_train=X_train,
+            y_train=y_train,
+            X_val=X_val,
+            y_val=y_val,
+            early_stopping_rounds=active_early_stopping_rounds,
+            eval_metric=active_eval_metric,
+            sample_weight=sample_weight,
+            sample_weight_eval_set=sample_weight_eval_set,
+        )
 
     def _split_train_validation(
         self,
@@ -778,19 +668,19 @@ class ModelTrainer:
         sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
         """
-        Train XGBoost model.
+        Train the configured backbone model.
 
         Args:
             X_train: Training features
             y_train: Training target values
             X_val: Validation features (optional)
             y_val: Validation target values (optional)
-            eval_set: Evaluation set list for XGBoost (optional)
-            early_stopping_rounds: Early stopping rounds for XGBoost (optional)
-            eval_metric: Evaluation metric for XGBoost (optional)
+            eval_set: Evaluation set list for the backbone adapter (optional)
+            early_stopping_rounds: Early stopping rounds when supported (optional)
+            eval_metric: Evaluation metric when supported (optional)
 
         Returns:
-            Trained XGBRegressor model
+            Trained model instance
 
         Raises:
             Exception: If training fails
@@ -1165,4 +1055,7 @@ class ModelTrainer:
         if not info:
             return "ModelTrainer (no model trained)"
 
-        return f"ModelTrainer(XGBRegressor, n_features={info.get('n_features', 'N/A')})"
+        return (
+            f"ModelTrainer({self.backbone_adapter.model_display_name}, "
+            f"n_features={info.get('n_features', 'N/A')})"
+        )

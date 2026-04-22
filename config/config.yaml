@@ -37,6 +37,7 @@ data:
     min_stratum_size: 12
 
 model:
+  backbone: "xgboost"
   params:
     objective: "reg:squarederror"
     max_depth: 5

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-import src.model_trainer as model_trainer_module
+import src.backbones.xgboost_adapter as xgboost_adapter_module
 from src.model_trainer import (
     KeMLRegressor,
     ModelTrainer,
@@ -118,7 +118,7 @@ def test_fit_model_passes_sample_weights_to_plain_xgb(monkeypatch):
     y_train = pd.Series([0.0, 0.1, 0.2])
     sample_weight = pd.Series([1.0, 2.0, 3.0])
 
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", RecordingRegressor)
 
     trainer._fit_model(trainer.params, X_train, y_train, sample_weight=sample_weight)
 
@@ -146,7 +146,7 @@ def test_fit_model_preserves_eval_settings_for_keml_branch(monkeypatch):
     sample_weight = pd.Series([1.0, 2.0, 3.0])
     sample_weight_eval = pd.Series([4.0, 5.0])
 
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", RecordingRegressor)
 
     trainer._fit_model(
         trainer.params,
@@ -194,7 +194,7 @@ def test_fit_model_requires_same_keml_linear_features_in_validation(monkeypatch)
     X_val = pd.DataFrame({"linear": [3.0, 4.0], "other": [2.5, 3.0]})
     y_val = pd.Series([0.3, 0.4])
 
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", RecordingRegressor)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", RecordingRegressor)
 
     with pytest.raises(ValueError, match="Validation data is missing KeML linear features"):
         trainer._fit_model(trainer.params, X_train, y_train, X_val, y_val)
@@ -211,6 +211,30 @@ def test_get_model_info_uses_actual_model_type():
     info = trainer.get_model_info()
 
     assert info["model_type"] == "InfoOnlyModel"
+
+
+def test_model_trainer_rejects_unknown_backbone():
+    with pytest.raises(ValueError, match="Unsupported model backbone"):
+        ModelTrainer(
+            params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+            backbone="unknown",
+        )
+
+
+def test_model_trainer_accepts_xgb_backbone_alias(monkeypatch):
+    trainer = ModelTrainer(
+        params={"device": "cpu", "n_jobs": -1, "random_state": 42},
+        backbone="xgb",
+        validation_size=0.0,
+    )
+    X_train = pd.DataFrame({"feature": [0.0, 1.0, 2.0]})
+    y_train = pd.Series([0.0, 0.1, 0.2])
+
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", RecordingRegressor)
+
+    trainer._fit_model(trainer.params, X_train, y_train)
+
+    assert RecordingRegressor.last_fit_kwargs is not None
 
 
 def test_cross_validate_restores_report_space_metrics_for_eta_u_target(monkeypatch):
@@ -230,7 +254,7 @@ def test_cross_validate_restores_report_space_metrics_for_eta_u_target(monkeypat
     y = pd.Series([1.0, 1.0, 2.0, 2.0])
     y_report = pd.Series([100.0, 200.0, 200.0, 400.0])
 
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", ConstantPsiRegressor)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", ConstantPsiRegressor)
 
     results = trainer.cross_validate(X, y, y_report=y_report, cv=splitter)
 
@@ -266,8 +290,8 @@ def test_optimize_hyperparameters_uses_report_target_and_splitter(monkeypatch, t
         samplers=types.SimpleNamespace(TPESampler=lambda **kwargs: object()),
     )
     monkeypatch.setitem(sys.modules, "optuna", fake_optuna)
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", ConstantPsiRegressor)
-    monkeypatch.setattr(model_trainer_module, "save_best_params", lambda **kwargs: None)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", ConstantPsiRegressor)
+    monkeypatch.setattr("src.model_trainer.save_best_params", lambda **kwargs: None)
 
     results = trainer.optimize_hyperparameters(
         X,
@@ -336,7 +360,7 @@ def test_cross_validate_uses_requested_metric_space_for_selection(monkeypatch):
     y = pd.Series([1.0, 1.0, 2.0, 2.0])
     y_report = pd.Series([100.0, 200.0, 200.0, 400.0])
 
-    monkeypatch.setattr(model_trainer_module.xgb, "XGBRegressor", ConstantPsiRegressor)
+    monkeypatch.setattr(xgboost_adapter_module.xgb, "XGBRegressor", ConstantPsiRegressor)
 
     original_results = trainer.cross_validate(
         X,

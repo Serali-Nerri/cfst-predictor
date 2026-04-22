@@ -6,12 +6,14 @@ from sklearn.model_selection import KFold
 from train import (
     build_cv_splitter,
     build_sample_weights,
+    build_study_name,
     get_cv_n_splits,
     make_common_artifact_payload,
     make_data_split_summary,
     make_overfitting_summary,
     make_selection_metrics_cv,
     make_serializable_cv_results,
+    normalize_model_backbone,
     select_final_n_estimators,
 )
 
@@ -146,6 +148,7 @@ def test_make_serializable_cv_results_handles_numpy_arrays():
 def test_make_common_artifact_payload_includes_shared_sections():
     result = make_common_artifact_payload(
         context_hash="abc123",
+        model_backbone="xgboost",
         params_source="config",
         final_model_params={"max_depth": 5},
         optuna_run_info=None,
@@ -170,6 +173,7 @@ def test_make_common_artifact_payload_includes_shared_sections():
     )
 
     assert result["context_hash"] == "abc123"
+    assert result["model_backbone"] == "xgboost"
     assert result["selection_metrics_cv"] == {
         "composite_objective": 1.0,
         "rmse": 2.0,
@@ -182,3 +186,27 @@ def test_make_common_artifact_payload_includes_shared_sections():
     }
     assert result["final_n_estimators_from_cv"] == 123
     assert result["fold_best_iterations"] == [100, 120]
+
+
+def test_normalize_model_backbone_defaults_to_xgboost_when_missing():
+    assert normalize_model_backbone(None) == "xgboost"
+
+
+def test_normalize_model_backbone_accepts_case_insensitive_xgboost():
+    assert normalize_model_backbone("XGBoost") == "xgboost"
+
+
+def test_normalize_model_backbone_rejects_unsupported_values():
+    with pytest.raises(ValueError, match="Unsupported config.model.backbone"):
+        normalize_model_backbone("lightgbm")
+
+
+def test_build_study_name_includes_backbone_prefix():
+    study_name = build_study_name(
+        "data/processed/final_feature_parameters_raw.csv",
+        "abc123",
+        "xgboost",
+    )
+
+    assert study_name.startswith("xgboost_optimization__")
+    assert study_name.endswith("__abc123")

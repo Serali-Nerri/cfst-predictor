@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Training Script for CFST XGBoost Pipeline
+Training script for the CFST regression pipeline.
 
 This script executes the complete training pipeline:
 1. Load configuration
 2. Load data
 3. Preprocess data
-4. Train XGBoost model
+4. Train the configured backbone model
 5. Evaluate model
 6. Save model and results
 
@@ -74,6 +74,34 @@ XGB_PARAM_KEYS = {
 }
 
 REQUIRED_MODEL_PARAM_KEYS = XGB_PARAM_KEYS.copy()
+DEFAULT_MODEL_BACKBONE = "xgboost"
+SUPPORTED_MODEL_BACKBONES = {DEFAULT_MODEL_BACKBONE, "xgb"}
+
+
+def normalize_model_backbone(backbone: Optional[Any]) -> str:
+    """Normalize and validate model backbone."""
+    if backbone is None:
+        normalized = DEFAULT_MODEL_BACKBONE
+    elif isinstance(backbone, str):
+        normalized = backbone.strip().lower()
+    else:
+        raise ValueError(
+            "config.model.backbone must be a string when provided. "
+            f"Got {type(backbone).__name__}."
+        )
+
+    if normalized not in SUPPORTED_MODEL_BACKBONES:
+        raise ValueError(
+            f"Unsupported config.model.backbone '{backbone}'. "
+            f"Expected one of {sorted(SUPPORTED_MODEL_BACKBONES)}."
+        )
+    return DEFAULT_MODEL_BACKBONE if normalized == "xgb" else normalized
+
+
+def get_backbone_model_stem(model_backbone: str) -> str:
+    """Return artifact/report name stem for the active backbone."""
+    normalized = normalize_model_backbone(model_backbone)
+    return f"{normalized}_model"
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -104,6 +132,7 @@ def build_training_context(
     target_mode: str,
     target_transform_type: Optional[str],
     columns_to_drop: List[str],
+    model_backbone: str,
     optuna_metric_space: str,
     selection_objective: Dict[str, Any],
     split_strategy: str,
@@ -125,6 +154,7 @@ def build_training_context(
         "target_mode": target_mode,
         "target_transform_type": target_transform_type or "none",
         "columns_to_drop": sorted(columns_to_drop),
+        "model_backbone": normalize_model_backbone(model_backbone),
         "optuna_metric_space": optuna_metric_space,
         "selection_objective": selection_objective,
         "split_strategy": split_strategy,
@@ -143,16 +173,18 @@ def build_training_context(
     return context_payload
 
 
-def build_study_name(data_file_path: str, context_hash: str) -> str:
+def build_study_name(data_file_path: str, context_hash: str, model_backbone: str) -> str:
     """Build an Optuna study name isolated by dataset fingerprint."""
     dataset_stem = Path(data_file_path).stem
     sanitized_stem = re.sub(r"[^A-Za-z0-9_]+", "_", dataset_stem).strip("_")
-    return f"xgboost_optimization__{sanitized_stem}__{context_hash}"
+    normalized_backbone = normalize_model_backbone(model_backbone)
+    return f"{normalized_backbone}_optimization__{sanitized_stem}__{context_hash}"
 
 
 def build_optuna_tuning_fingerprint(
     model_params: Dict[str, Any],
     cv_config: Dict[str, Any],
+    model_backbone: str,
     optuna_metric_space: str,
     target_mode: str,
     selection_objective: Dict[str, Any],
@@ -167,6 +199,7 @@ def build_optuna_tuning_fingerprint(
     """Build a deterministic fingerprint for the Optuna tuning strategy."""
     fingerprint_payload = {
         "search_space_version": OPTUNA_SEARCH_SPACE_VERSION,
+        "model_backbone": normalize_model_backbone(model_backbone),
         "optuna_metric_space": optuna_metric_space,
         "target_mode": target_mode,
         "selection_objective": selection_objective,
@@ -191,10 +224,13 @@ def build_optuna_tuning_fingerprint(
 
 
 def build_versioned_study_name(
-    data_file_path: str, context_hash: str, tuning_fingerprint: str
+    data_file_path: str,
+    context_hash: str,
+    tuning_fingerprint: str,
+    model_backbone: str,
 ) -> str:
     """Build an Optuna study name isolated by data context and tuning strategy."""
-    base_study_name = build_study_name(data_file_path, context_hash)
+    base_study_name = build_study_name(data_file_path, context_hash, model_backbone)
     return f"{base_study_name}__{tuning_fingerprint}"
 
 
@@ -472,6 +508,7 @@ def split_training_data(
 def make_common_artifact_payload(
     *,
     context_hash: str,
+    model_backbone: str,
     params_source: str,
     final_model_params: Dict[str, Any],
     optuna_run_info: Optional[Dict[str, Any]],
@@ -496,6 +533,7 @@ def make_common_artifact_payload(
 ) -> Dict[str, Any]:
     return {
         "context_hash": context_hash,
+        "model_backbone": normalize_model_backbone(model_backbone),
         "params_source": params_source,
         "final_model_params": final_model_params,
         "optuna_run_info": optuna_run_info,
@@ -607,6 +645,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"Columns to drop: {columns_to_drop}")
 
         target_mode = normalize_target_mode(data_config.get("target_mode", "raw"))
+        model_backbone = normalize_model_backbone(model_config.get("backbone"))
+        model_name_stem = get_backbone_model_stem(model_backbone)
 
         # Read target transform configuration
         target_transform_config = data_config.get("target_transform", {})
@@ -640,6 +680,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         logger.info(f"Optuna RMSE metric space: {optuna_metric_space}")
         logger.info(f"Cross-validation RMSE metric space: {cv_metric_space}")
+        logger.info(f"Model backbone: {model_backbone}")
         logger.info(f"Data split strategy: {split_strategy}")
         logger.info(f"Target mode: {target_mode}")
         logger.info(f"KeML residual split enabled: {use_keml_residual_split}")
@@ -653,6 +694,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             target_mode=target_mode,
             target_transform_type=target_transform_type,
             columns_to_drop=columns_to_drop,
+            model_backbone=model_backbone,
             optuna_metric_space=optuna_metric_space,
             selection_objective=selection_objective_config,
             split_strategy=split_strategy,
@@ -667,6 +709,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         tuning_fingerprint = build_optuna_tuning_fingerprint(
             xgb_params,
             cv_config,
+            model_backbone,
             optuna_metric_space,
             target_mode,
             selection_objective_config,
@@ -679,7 +722,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             keml_config,
         )
         study_name = build_versioned_study_name(
-            data_path, context_hash, tuning_fingerprint
+            data_path, context_hash, tuning_fingerprint, model_backbone
         )
         logger.info(f"Training context hash: {context_hash}")
         logger.info(f"Optuna strategy version: {OPTUNA_SEARCH_SPACE_VERSION}")
@@ -815,6 +858,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
 
         trainer = ModelTrainer(
             params=xgb_params,
+            backbone=model_backbone,
             use_optuna=use_optuna,
             n_trials=n_trials,
             optuna_timeout=optuna_timeout,
@@ -1088,7 +1132,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             model,
             feature_names,
             str(plots_dir),
-            "xgboost_model_train",
+            f"{model_name_stem}_train",
         )
 
         # Test set plots (PRIMARY - shows true generalization)
@@ -1098,18 +1142,19 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             model,
             feature_names,
             str(plots_dir),
-            "xgboost_model_test",
+            f"{model_name_stem}_test",
         )
 
         logger.info(f"Visualizations saved to {plots_dir}/")
-        logger.info(f"  Training: xgboost_model_train_*.png")
-        logger.info(f"  Test:     xgboost_model_test_*.png")
+        logger.info(f"  Training: {model_name_stem}_train_*.png")
+        logger.info(f"  Test:     {model_name_stem}_test_*.png")
 
         # Step 8: Save model and artifacts
         logger.info("\nStep 8: Saving model and artifacts...")
 
         common_artifact_payload = make_common_artifact_payload(
             context_hash=context_hash,
+            model_backbone=model_backbone,
             params_source=params_source,
             final_model_params=trainer.params.copy(),
             optuna_run_info=optuna_run_info,
@@ -1166,7 +1211,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         eval_report_path = output_path / "evaluation_report.json"
         evaluator.save_evaluation_report(
             {
-                "model_name": "xgboost_model",
+                "model_name": model_name_stem,
                 "timestamp": pd.Timestamp.now().isoformat(),
                 **common_artifact_payload,
                 "cv_results": serializable_cv_results,
@@ -1192,7 +1237,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info("\n" + "=" * 80)
         logger.info("TRAINING COMPLETED SUCCESSFULLY")
         logger.info("=" * 80)
-        logger.info(f"Model saved to: {output_dir}/xgboost_model.pkl")
+        logger.info(f"Model saved to: {output_dir}/{model_name_stem}.pkl (backbone={model_backbone})")
         logger.info(f"Preprocessor saved to: {output_dir}/preprocessor.pkl")
         logger.info(f"Evaluation report: {eval_report_path}")
         logger.info(f"Plots saved to: {plots_dir}/")
