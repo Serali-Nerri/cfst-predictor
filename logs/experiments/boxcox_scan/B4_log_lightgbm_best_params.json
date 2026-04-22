@@ -1,0 +1,18 @@
+{
+  "trial_number": 50,
+  "best_composite_objective": 8.059989316357115,
+  "best_score": 8.059989316357115,
+  "parameters": {
+    "n_estimators": 714,
+    "learning_rate": 0.10534592836724958,
+    "num_leaves": 100,
+    "subsample": 0.7412040501278344,
+    "colsample_bytree": 0.5832013143603869
+  },
+  "timestamp": "2026-04-22T22:18:11.304517",
+  "n_trials_total": 100,
+  "context_hash": "4ca307394ddb",
+  "data_file": "/home/thelya/Work/CFST_Alchemy_Lab/cfst_predictitor/data/processed/final_feature_parameters_raw.csv",
+  "study_name": "lightgbm_optimization__final_feature_parameters_raw__4ca307394ddb__4e05763e61",
+  "storage_url": "sqlite:///logs/experiments/boxcox_scan/B4_log_lightgbm_optuna.db"
+}

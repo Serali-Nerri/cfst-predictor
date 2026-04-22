@@ -68,6 +68,9 @@ class CatBoostBackboneAdapter:
         except ImportError as exc:
             raise ImportError("catboost is not installed. Install with: pip install catboost") from exc
 
+        filtered_params = params.copy()
+        filtered_params.pop("n_jobs", None)
+
         fit_kwargs: Dict[str, Any] = {}
         if sample_weight is not None:
             fit_kwargs["sample_weight"] = sample_weight.to_numpy(dtype=float)
@@ -80,7 +83,7 @@ class CatBoostBackboneAdapter:
             if eval_metric is not None:
                 fit_kwargs["verbose"] = False
 
-        model = CatBoostRegressor(**params)
+        model = CatBoostRegressor(**filtered_params)
         model.fit(X_train, y_train, **fit_kwargs)
         return model
 

@@ -13,6 +13,23 @@ class MLPBackboneAdapter:
     name = "mlp"
     model_display_name = "MLPRegressor"
 
+    def _normalize_fit_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = params.copy()
+        normalized.pop("n_jobs", None)
+        hidden_layer_sizes = normalized.get("hidden_layer_sizes")
+        if isinstance(hidden_layer_sizes, (list, tuple)) and len(hidden_layer_sizes) > 0:
+            first_layer = int(hidden_layer_sizes[0])
+            second_layer = int(hidden_layer_sizes[1]) if len(hidden_layer_sizes) > 1 else 64
+        else:
+            first_layer = normalized.pop("first_layer", None)
+            second_layer = normalized.pop("second_layer", None)
+        if first_layer is not None:
+            normalized["hidden_layer_sizes"] = (
+                int(first_layer),
+                int(second_layer) if second_layer is not None else 64,
+            )
+        return normalized
+
     def get_default_params(self) -> Dict[str, Any]:
         return {
             "hidden_layer_sizes": (128, 64),
@@ -26,9 +43,10 @@ class MLPBackboneAdapter:
         }
 
     def get_optuna_center_point(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        hidden_layer_sizes = params.get("hidden_layer_sizes", (128, 64))
-        first_layer = int(hidden_layer_sizes[0]) if isinstance(hidden_layer_sizes, tuple) else 128
-        second_layer = int(hidden_layer_sizes[1]) if isinstance(hidden_layer_sizes, tuple) and len(hidden_layer_sizes) > 1 else 64
+        normalized = self._normalize_fit_params(params)
+        hidden_layer_sizes = normalized.get("hidden_layer_sizes", (128, 64))
+        first_layer = int(hidden_layer_sizes[0])
+        second_layer = int(hidden_layer_sizes[1]) if len(hidden_layer_sizes) > 1 else 64
         return {
             "first_layer": first_layer,
             "second_layer": second_layer,
@@ -87,7 +105,8 @@ class MLPBackboneAdapter:
         sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
         del X_val, y_val, early_stopping_rounds, eval_metric, sample_weight_eval_set
-        model = MLPRegressor(**params)
+        filtered_params = self._normalize_fit_params(params)
+        model = MLPRegressor(**filtered_params)
         fit_kwargs: Dict[str, Any] = {}
         if sample_weight is not None:
             fit_kwargs["sample_weight"] = sample_weight.to_numpy(dtype=float)
