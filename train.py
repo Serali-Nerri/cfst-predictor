@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-Training Script for CFST XGBoost Pipeline
+Training script for the CFST regression pipeline.
 
 This script executes the complete training pipeline:
 1. Load configuration
 2. Load data
 3. Preprocess data
-4. Train XGBoost model
+4. Train the configured backbone model
 5. Evaluate model
 6. Save model and results
 
@@ -43,7 +43,8 @@ from src.data_loader import DataLoader
 from src.preprocessor import Preprocessor
 from src.model_trainer import ModelTrainer, OPTUNA_SEARCH_SPACE_VERSION
 from src.evaluator import Evaluator
-from src.utils.model_utils import _make_serializable, save_model
+from src.utils.model_utils import LEGACY_MODEL_NAME, _make_serializable, save_model
+from src.backbones import list_backbone_adapters
 from src.splitting import (
     build_regression_stratification_labels,
     get_split_strategy,
@@ -56,7 +57,8 @@ from src.visualizer import (
 logger = setup_logger(__name__)
 
 
-XGB_PARAM_KEYS = {
+DEFAULT_MODEL_BACKBONE = "xgboost"
+XGBOOST_REQUIRED_PARAM_KEYS = {
     "objective",
     "max_depth",
     "learning_rate",
@@ -72,8 +74,37 @@ XGB_PARAM_KEYS = {
     "device",
     "n_jobs",
 }
+SUPPORTED_MODEL_BACKBONES = set(list_backbone_adapters())
+SUPPORTED_MODEL_BACKBONE_ALIASES = sorted(SUPPORTED_MODEL_BACKBONES | {"xgb"})
 
-REQUIRED_MODEL_PARAM_KEYS = XGB_PARAM_KEYS.copy()
+
+def normalize_model_backbone(backbone: Optional[Any]) -> str:
+    """Normalize and validate model backbone."""
+    if backbone is None:
+        normalized = DEFAULT_MODEL_BACKBONE
+    elif isinstance(backbone, str):
+        normalized = backbone.strip().lower()
+    else:
+        raise ValueError(
+            "config.model.backbone must be a string when provided. "
+            f"Got {type(backbone).__name__}."
+        )
+
+    if normalized == "xgb":
+        normalized = DEFAULT_MODEL_BACKBONE
+
+    if normalized not in SUPPORTED_MODEL_BACKBONE_ALIASES:
+        raise ValueError(
+            f"Unsupported config.model.backbone '{backbone}'. "
+            f"Expected one of {SUPPORTED_MODEL_BACKBONE_ALIASES}."
+        )
+    return normalized
+
+
+def get_backbone_model_stem(model_backbone: str) -> str:
+    """Return artifact/report name stem for the active backbone."""
+    normalized = normalize_model_backbone(model_backbone)
+    return f"{normalized}_model"
 
 
 def load_config(config_path: str) -> Dict[str, Any]:
@@ -104,6 +135,7 @@ def build_training_context(
     target_mode: str,
     target_transform_type: Optional[str],
     columns_to_drop: List[str],
+    model_backbone: str,
     optuna_metric_space: str,
     selection_objective: Dict[str, Any],
     split_strategy: str,
@@ -125,6 +157,7 @@ def build_training_context(
         "target_mode": target_mode,
         "target_transform_type": target_transform_type or "none",
         "columns_to_drop": sorted(columns_to_drop),
+        "model_backbone": normalize_model_backbone(model_backbone),
         "optuna_metric_space": optuna_metric_space,
         "selection_objective": selection_objective,
         "split_strategy": split_strategy,
@@ -143,16 +176,18 @@ def build_training_context(
     return context_payload
 
 
-def build_study_name(data_file_path: str, context_hash: str) -> str:
+def build_study_name(data_file_path: str, context_hash: str, model_backbone: str) -> str:
     """Build an Optuna study name isolated by dataset fingerprint."""
     dataset_stem = Path(data_file_path).stem
     sanitized_stem = re.sub(r"[^A-Za-z0-9_]+", "_", dataset_stem).strip("_")
-    return f"xgboost_optimization__{sanitized_stem}__{context_hash}"
+    normalized_backbone = normalize_model_backbone(model_backbone)
+    return f"{normalized_backbone}_optimization__{sanitized_stem}__{context_hash}"
 
 
 def build_optuna_tuning_fingerprint(
     model_params: Dict[str, Any],
     cv_config: Dict[str, Any],
+    model_backbone: str,
     optuna_metric_space: str,
     target_mode: str,
     selection_objective: Dict[str, Any],
@@ -167,6 +202,7 @@ def build_optuna_tuning_fingerprint(
     """Build a deterministic fingerprint for the Optuna tuning strategy."""
     fingerprint_payload = {
         "search_space_version": OPTUNA_SEARCH_SPACE_VERSION,
+        "model_backbone": normalize_model_backbone(model_backbone),
         "optuna_metric_space": optuna_metric_space,
         "target_mode": target_mode,
         "selection_objective": selection_objective,
@@ -191,39 +227,54 @@ def build_optuna_tuning_fingerprint(
 
 
 def build_versioned_study_name(
-    data_file_path: str, context_hash: str, tuning_fingerprint: str
+    data_file_path: str,
+    context_hash: str,
+    tuning_fingerprint: str,
+    model_backbone: str,
 ) -> str:
     """Build an Optuna study name isolated by data context and tuning strategy."""
-    base_study_name = build_study_name(data_file_path, context_hash)
+    base_study_name = build_study_name(data_file_path, context_hash, model_backbone)
     return f"{base_study_name}__{tuning_fingerprint}"
 
 
-def build_xgb_params(model_config: Dict[str, Any]) -> Dict[str, Any]:
+def build_model_params(
+    model_config: Dict[str, Any],
+    model_backbone: str,
+) -> Dict[str, Any]:
     """
-    Read model.params as the only valid hyperparameter source.
+    Read and validate model params by backbone.
+
+    For xgboost, keep existing strict validation.
+    For other backbones, allow config defaults and adapter defaults.
     """
-    legacy_top_level_keys = sorted(XGB_PARAM_KEYS.intersection(model_config.keys()))
-    if legacy_top_level_keys:
+    legacy_found = sorted(XGBOOST_REQUIRED_PARAM_KEYS.intersection(model_config.keys()))
+    if legacy_found:
         raise ValueError(
             "Legacy model hyperparameter keys at config.model top-level are not allowed: "
-            f"{legacy_top_level_keys}. Move them under config.model.params."
+            f"{legacy_found}. Move them under config.model.params."
         )
 
     params = model_config.get("params")
-    if not isinstance(params, dict) or not params:
-        raise ValueError(
-            "config.model.params must be a non-empty dictionary and is the only valid "
-            "location for XGBoost hyperparameters."
-        )
+    if model_backbone == DEFAULT_MODEL_BACKBONE:
+        if not isinstance(params, dict) or not params:
+            raise ValueError(
+                "config.model.params must be a non-empty dictionary and is the only valid "
+                "location for XGBoost hyperparameters."
+            )
 
-    missing_required = sorted(
-        key for key in REQUIRED_MODEL_PARAM_KEYS if key not in params
-    )
-    if missing_required:
-        raise ValueError(
-            f"config.model.params is missing required keys: {missing_required}"
+        missing_required = sorted(
+            key for key in XGBOOST_REQUIRED_PARAM_KEYS if key not in params
         )
+        if missing_required:
+            raise ValueError(
+                f"config.model.params is missing required keys for xgboost: {missing_required}"
+            )
+        return params.copy()
 
+    if not params:
+        return {}
+    if not isinstance(params, dict):
+        raise ValueError("config.model.params must be a dictionary when provided.")
     return params.copy()
 
 
@@ -287,19 +338,6 @@ def build_target_metadata(
             "derived_columns": list(derived_columns),
         },
     }
-
-
-def select_final_n_estimators(cv_results: Dict[str, Any], fallback: int) -> Tuple[int, List[int]]:
-    """Select a final tree count from CV best_iteration values."""
-    fold_details = cast(List[Dict[str, Any]], cv_results.get("fold_details", []))
-    best_iterations = [
-        int(detail["best_iteration"]) + 1
-        for detail in fold_details
-        if detail.get("best_iteration") is not None
-    ]
-    if not best_iterations:
-        return int(fallback), []
-    return int(np.median(np.asarray(best_iterations, dtype=int))), best_iterations
 
 
 def make_selection_metrics_cv(cv_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -472,6 +510,7 @@ def split_training_data(
 def make_common_artifact_payload(
     *,
     context_hash: str,
+    model_backbone: str,
     params_source: str,
     final_model_params: Dict[str, Any],
     optuna_run_info: Optional[Dict[str, Any]],
@@ -496,6 +535,7 @@ def make_common_artifact_payload(
 ) -> Dict[str, Any]:
     return {
         "context_hash": context_hash,
+        "model_backbone": normalize_model_backbone(model_backbone),
         "params_source": params_source,
         "final_model_params": final_model_params,
         "optuna_run_info": optuna_run_info,
@@ -571,7 +611,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         Exception: If any step in the pipeline fails
     """
     logger.info("=" * 80)
-    logger.info("CFST XGBOOST PIPELINE - TRAINING STARTED")
+    logger.info("CFST BACKBONE PIPELINE - TRAINING STARTED")
     logger.info("=" * 80)
 
     try:
@@ -607,6 +647,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"Columns to drop: {columns_to_drop}")
 
         target_mode = normalize_target_mode(data_config.get("target_mode", "raw"))
+        model_backbone = normalize_model_backbone(model_config.get("backbone"))
+        model_name_stem = get_backbone_model_stem(model_backbone)
 
         # Read target transform configuration
         target_transform_config = data_config.get("target_transform", {})
@@ -640,12 +682,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         logger.info(f"Optuna RMSE metric space: {optuna_metric_space}")
         logger.info(f"Cross-validation RMSE metric space: {cv_metric_space}")
+        logger.info(f"Model backbone: {model_backbone}")
         logger.info(f"Data split strategy: {split_strategy}")
         logger.info(f"Target mode: {target_mode}")
         logger.info(f"KeML residual split enabled: {use_keml_residual_split}")
 
-        # Validate XGBoost params early so study naming matches the real tuning config.
-        xgb_params = build_xgb_params(model_config)
+        # Validate params early so study naming matches the real tuning config.
+        model_params = build_model_params(model_config=model_config, model_backbone=model_backbone)
 
         training_context = build_training_context(
             data_file_path=data_path,
@@ -653,6 +696,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             target_mode=target_mode,
             target_transform_type=target_transform_type,
             columns_to_drop=columns_to_drop,
+            model_backbone=model_backbone,
             optuna_metric_space=optuna_metric_space,
             selection_objective=selection_objective_config,
             split_strategy=split_strategy,
@@ -665,8 +709,9 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         context_hash = training_context["context_hash"]
         tuning_fingerprint = build_optuna_tuning_fingerprint(
-            xgb_params,
+            model_params,
             cv_config,
+            model_backbone,
             optuna_metric_space,
             target_mode,
             selection_objective_config,
@@ -679,7 +724,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             keml_config,
         )
         study_name = build_versioned_study_name(
-            data_path, context_hash, tuning_fingerprint
+            data_path, context_hash, tuning_fingerprint, model_backbone
         )
         logger.info(f"Training context hash: {context_hash}")
         logger.info(f"Optuna strategy version: {OPTUNA_SEARCH_SPACE_VERSION}")
@@ -814,7 +859,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         cv_splitter = build_cv_splitter(cv_config, effective_split_strategy)
 
         trainer = ModelTrainer(
-            params=xgb_params,
+            params=model_params,
+            backbone=model_backbone,
             use_optuna=use_optuna,
             n_trials=n_trials,
             optuna_timeout=optuna_timeout,
@@ -888,13 +934,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             f"(+/- {cv_results['std_cv_score']:.4f})"
         )
 
-        final_n_estimators, fold_best_iterations = select_final_n_estimators(
-            cv_results,
-            fallback=int(trainer.params.get("n_estimators", xgb_params["n_estimators"])),
+        finalized_params, fold_best_iterations = trainer.finalize_params_after_cv(
+            cv_results
         )
-        trainer.params["n_estimators"] = final_n_estimators
+        trainer.params.update(finalized_params)
+        final_n_estimators = int(trainer.params.get("n_estimators", 200))
         logger.info(
-            "Selected final n_estimators=%s from CV fold best_iteration values=%s",
+            "Finalized model params after CV: n_estimators=%s, fold_best_iterations=%s",
             final_n_estimators,
             fold_best_iterations,
         )
@@ -1088,7 +1134,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             model,
             feature_names,
             str(plots_dir),
-            "xgboost_model_train",
+            f"{model_name_stem}_train",
         )
 
         # Test set plots (PRIMARY - shows true generalization)
@@ -1098,18 +1144,19 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             model,
             feature_names,
             str(plots_dir),
-            "xgboost_model_test",
+            f"{model_name_stem}_test",
         )
 
         logger.info(f"Visualizations saved to {plots_dir}/")
-        logger.info(f"  Training: xgboost_model_train_*.png")
-        logger.info(f"  Test:     xgboost_model_test_*.png")
+        logger.info(f"  Training: {model_name_stem}_train_*.png")
+        logger.info(f"  Test:     {model_name_stem}_test_*.png")
 
         # Step 8: Save model and artifacts
         logger.info("\nStep 8: Saving model and artifacts...")
 
         common_artifact_payload = make_common_artifact_payload(
             context_hash=context_hash,
+            model_backbone=model_backbone,
             params_source=params_source,
             final_model_params=trainer.params.copy(),
             optuna_run_info=optuna_run_info,
@@ -1153,11 +1200,17 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             },
         }
 
+        output_model_name = (
+            LEGACY_MODEL_NAME
+            if model_backbone == DEFAULT_MODEL_BACKBONE
+            else f"{model_name_stem}.pkl"
+        )
         save_model(
             model=model,
             preprocessor=preprocessor,
             feature_names=feature_names,
             output_dir=output_dir,
+            model_name=output_model_name,
             metadata=metadata,
         )
 
@@ -1166,7 +1219,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         eval_report_path = output_path / "evaluation_report.json"
         evaluator.save_evaluation_report(
             {
-                "model_name": "xgboost_model",
+                "model_name": model_name_stem,
                 "timestamp": pd.Timestamp.now().isoformat(),
                 **common_artifact_payload,
                 "cv_results": serializable_cv_results,
@@ -1192,7 +1245,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info("\n" + "=" * 80)
         logger.info("TRAINING COMPLETED SUCCESSFULLY")
         logger.info("=" * 80)
-        logger.info(f"Model saved to: {output_dir}/xgboost_model.pkl")
+        logger.info(f"Model saved to: {output_dir}/{model_name_stem}.pkl (backbone={model_backbone})")
         logger.info(f"Preprocessor saved to: {output_dir}/preprocessor.pkl")
         logger.info(f"Evaluation report: {eval_report_path}")
         logger.info(f"Plots saved to: {plots_dir}/")
@@ -1282,7 +1335,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
 def main():
     """Main entry point for the training script."""
     parser = argparse.ArgumentParser(
-        description="Train CFST XGBoost Model",
+        description="Train CFST model with the configured backbone",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

@@ -1,5 +1,5 @@
 '''
-Model Utilities Module for CFST XGBoost Pipeline
+Model utilities module for the CFST backbone pipeline
 
 This module handles saving and loading trained models, preprocessors, and metadata.
 '''
@@ -8,7 +8,7 @@ import joblib
 import json
 import numpy as np
 from pathlib import Path
-from typing import Tuple, List, Any, Optional
+from typing import Tuple, List, Any, Optional, Dict, cast
 import pandas as pd
 
 from src.utils.logger import get_logger
@@ -16,26 +16,169 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+DEFAULT_ARTIFACT_MANIFEST_NAME = "artifact_manifest.json"
+LEGACY_MODEL_NAME = "xgboost_model.pkl"
+DEFAULT_PREPROCESSOR_NAME = "preprocessor.pkl"
+DEFAULT_FEATURE_NAMES_NAME = "feature_names.json"
+DEFAULT_METADATA_NAME = "training_metadata.json"
+
+
+def _default_artifact_manifest() -> Dict[str, str]:
+    """Return default artifact file names for current and legacy compatibility."""
+    return {
+        "model": LEGACY_MODEL_NAME,
+        "preprocessor": DEFAULT_PREPROCESSOR_NAME,
+        "feature_names": DEFAULT_FEATURE_NAMES_NAME,
+        "metadata": DEFAULT_METADATA_NAME,
+    }
+
+
+def _load_artifact_manifest(model_dir_path: Path, manifest_name: str = DEFAULT_ARTIFACT_MANIFEST_NAME) -> Dict[str, str]:
+    """Load artifact manifest from disk when present and valid."""
+    manifest_path = model_dir_path / manifest_name
+    if not manifest_path.exists():
+        logger.info(
+            "Artifact manifest not found at %s; using legacy defaults",
+            manifest_path,
+        )
+        return _default_artifact_manifest()
+
+    try:
+        with open(manifest_path, 'r') as f:
+            payload = json.load(f)
+    except Exception as exc:
+        logger.warning(
+            "Failed to read artifact manifest at %s (%s); using legacy defaults",
+            manifest_path,
+            exc,
+        )
+        return _default_artifact_manifest()
+
+    if not isinstance(payload, dict):
+        logger.warning(
+            "Invalid artifact manifest root at %s; using legacy defaults",
+            manifest_path,
+        )
+        return _default_artifact_manifest()
+
+    artifacts = payload.get("artifacts")
+    if not isinstance(artifacts, dict):
+        logger.warning(
+            "Invalid artifact manifest format at %s; using legacy defaults",
+            manifest_path,
+        )
+        return _default_artifact_manifest()
+
+    manifest = _default_artifact_manifest()
+    for key in manifest:
+        value = artifacts.get(key)
+        if isinstance(value, str) and value.strip():
+            manifest[key] = value.strip()
+
+    return manifest
+
+
+def _save_artifact_manifest(
+    output_path: Path,
+    model_name: str,
+    preprocessor_name: str,
+    feature_names_name: str,
+    metadata_name: str,
+    manifest_name: str = DEFAULT_ARTIFACT_MANIFEST_NAME,
+) -> None:
+    """Save lightweight artifact manifest describing artifact file names."""
+    manifest_path = output_path / manifest_name
+    payload = {
+        "version": 1,
+        "artifacts": {
+            "model": model_name,
+            "preprocessor": preprocessor_name,
+            "feature_names": feature_names_name,
+            "metadata": metadata_name,
+        },
+    }
+
+    try:
+        with open(manifest_path, 'w') as f:
+            json.dump(payload, f, indent=2)
+        logger.info(f"Artifact manifest saved to {manifest_path}")
+    except Exception as exc:
+        logger.error("Failed to save artifact manifest to %s: %s", manifest_path, exc)
+        raise Exception(f"Failed to save artifact manifest: {exc}")
+
+
+def _resolve_artifact_path(model_dir_path: Path, artifact_name: str) -> Path:
+    candidate = (model_dir_path / artifact_name).resolve()
+    try:
+        candidate.relative_to(model_dir_path.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"Artifact path '{artifact_name}' escapes model directory '{model_dir_path}'"
+        ) from exc
+    return candidate
+
+
+
+def resolve_artifact_paths(
+    model_dir: str,
+    model_name: Optional[str] = None,
+    preprocessor_name: Optional[str] = None,
+    feature_names_name: Optional[str] = None,
+    metadata_name: Optional[str] = None,
+) -> Dict[str, Optional[str]]:
+    """Resolve model artifact paths from directory with manifest + legacy fallback."""
+    model_dir_path = Path(model_dir).resolve()
+
+    if not model_dir_path.exists():
+        error_msg = f"Model directory not found: {model_dir}"
+        logger.error(error_msg)
+        raise FileNotFoundError(error_msg)
+
+    manifest = _load_artifact_manifest(model_dir_path)
+
+    resolved_model_name = model_name or manifest["model"]
+    resolved_preprocessor_name = preprocessor_name or manifest["preprocessor"]
+    resolved_feature_names_name = feature_names_name or manifest["feature_names"]
+    resolved_metadata_name = metadata_name or manifest["metadata"]
+
+    model_path = _resolve_artifact_path(model_dir_path, resolved_model_name)
+    preprocessor_path = _resolve_artifact_path(model_dir_path, resolved_preprocessor_name)
+    feature_names_path = _resolve_artifact_path(model_dir_path, resolved_feature_names_name)
+    metadata_path = _resolve_artifact_path(model_dir_path, resolved_metadata_name)
+
+    if model_name is None and not model_path.exists() and manifest["model"] != LEGACY_MODEL_NAME:
+        legacy_model_path = _resolve_artifact_path(model_dir_path, LEGACY_MODEL_NAME)
+        if legacy_model_path.exists():
+            model_path = legacy_model_path
+
+    return {
+        "model": str(model_path) if model_path.exists() else None,
+        "preprocessor": str(preprocessor_path) if preprocessor_path.exists() else None,
+        "feature_names": str(feature_names_path) if feature_names_path.exists() else None,
+        "metadata": str(metadata_path) if metadata_path.exists() else None,
+    }
+
+
 def save_model(
     model: Any,
     preprocessor: Any,
     feature_names: List[str],
     output_dir: str,
-    model_name: str = "xgboost_model.pkl",
-    preprocessor_name: str = "preprocessor.pkl",
-    feature_names_name: str = "feature_names.json",
+    model_name: str = LEGACY_MODEL_NAME,
+    preprocessor_name: str = DEFAULT_PREPROCESSOR_NAME,
+    feature_names_name: str = DEFAULT_FEATURE_NAMES_NAME,
     metadata: Optional[dict] = None,
-    metadata_name: str = "training_metadata.json"
+    metadata_name: str = DEFAULT_METADATA_NAME,
 ) -> None:
     """
     Save trained model, preprocessor, and metadata.
 
     Args:
-        model: Trained XGBoost model
+        model: Trained model object
         preprocessor: Fitted preprocessor
         feature_names: List of feature names
         output_dir: Output directory path
-        model_name: Model file name (default: xgboost_model.pkl)
+        model_name: Model file name (default: legacy xgboost_model.pkl)
         preprocessor_name: Preprocessor file name (default: preprocessor.pkl)
         feature_names_name: Feature names file name (default: feature_names.json)
         metadata: Additional metadata to save (optional)
@@ -93,6 +236,14 @@ def save_model(
             logger.error(f"Failed to save metadata: {str(e)}")
             # Don't raise exception for metadata, just log the error
             logger.warning("Model and preprocessor saved, but metadata failed")
+
+    _save_artifact_manifest(
+        output_path=output_path,
+        model_name=model_name,
+        preprocessor_name=preprocessor_name,
+        feature_names_name=feature_names_name,
+        metadata_name=metadata_name,
+    )
 
     logger.info("Model and artifacts saved successfully")
 
@@ -153,37 +304,38 @@ def load_model(
 
 def load_model_from_directory(
     model_dir: str,
-    model_name: str = "xgboost_model.pkl",
-    preprocessor_name: str = "preprocessor.pkl",
-    feature_names_name: str = "feature_names.json"
+    model_name: Optional[str] = None,
+    preprocessor_name: Optional[str] = None,
+    feature_names_name: Optional[str] = None,
 ) -> Tuple[Any, Optional[Any], Optional[List[str]]]:
     """
     Load model and artifacts from a directory.
 
     Args:
         model_dir: Directory containing model artifacts
-        model_name: Model file name (default: xgboost_model.pkl)
+        model_name: Model file name (default: legacy xgboost_model.pkl)
         preprocessor_name: Preprocessor file name (default: preprocessor.pkl)
         feature_names_name: Feature names file name (default: feature_names.json)
 
     Returns:
         Tuple of (model, preprocessor, feature_names)
     """
-    model_dir_path = Path(model_dir)
+    resolved_paths = resolve_artifact_paths(
+        model_dir=model_dir,
+        model_name=model_name,
+        preprocessor_name=preprocessor_name,
+        feature_names_name=feature_names_name,
+        metadata_name=DEFAULT_METADATA_NAME,
+    )
 
-    if not model_dir_path.exists():
-        error_msg = f"Model directory not found: {model_dir}"
-        logger.error(error_msg)
-        raise FileNotFoundError(error_msg)
-
-    model_path = model_dir_path / model_name
-    preprocessor_path = model_dir_path / preprocessor_name
-    feature_names_path = model_dir_path / feature_names_name
+    model_path = resolved_paths["model"]
+    if model_path is None:
+        raise FileNotFoundError(f"Required model artifact not found under {model_dir}")
 
     return load_model(
-        str(model_path),
-        str(preprocessor_path) if preprocessor_path.exists() else None,
-        str(feature_names_path) if feature_names_path.exists() else None
+        cast(str, model_path),
+        resolved_paths["preprocessor"],
+        resolved_paths["feature_names"],
     )
 
 
@@ -230,6 +382,9 @@ def load_metadata(metadata_path: str) -> dict:
     try:
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
+
+        if not isinstance(metadata, dict):
+            raise ValueError("Metadata JSON root must be an object")
 
         logger.info(f"Metadata loaded from {metadata_path}")
         return metadata

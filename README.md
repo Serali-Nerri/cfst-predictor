@@ -1,14 +1,14 @@
-# CFST柱极限承载力预测 - XGBoost Pipeline
+# CFST柱极限承载力预测 - 可插拔Backbone流水线（默认 XGBoost）
 
 ## 项目概述
 
-本项目使用 `XGBoost` 构建一个面向混凝土填充钢管（CFST）柱极限承载力预测的机器学习流水线，覆盖以下当前已实现的能力：
+本项目构建了一个面向混凝土填充钢管（CFST）柱极限承载力预测的机器学习流水线，当前默认 `backbone` 为 `XGBoost`，并保持既有 XGBoost 训练/推理路径兼容，覆盖以下当前已实现的能力：
 
 - 从已处理的特征 CSV 加载数据并提取报告目标列
 - 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`eta_u = Nexp / Npl`、`r = (Nexp - Npl) / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family` 等派生列
 - 先划分训练/测试集，再进行预处理，避免预处理数据泄漏
 - 按配置剔除指定特征列
-- 训练 `XGBRegressor`
+- 训练默认 `XGBoost` 回归器（当前主线实现）
 - 可选使用 `Optuna` 做超参数搜索
 - 在交叉验证各折内部切验证集支持 `early_stopping_rounds`
 - 按 `config.cv` 中的 `n_splits` / `shuffle` / `random_state` 执行交叉验证
@@ -28,7 +28,7 @@
 ## 当前实现的核心特性
 
 - **模块化结构**：`src/` 下按数据加载、预处理、训练、评估、预测、可视化拆分
-- **严格参数入口**：XGBoost 参数仅允许从 `config.model.params` 读取
+- **严格参数入口**：默认 XGBoost 参数从 `config.model.params` 读取
 - **上下文隔离的最优参数复用**：通过 `context_hash` 约束 `logs/best_params_*.json` 的复用范围
 - **目标空间分离**：训练可在 `eta_u` / `r` 空间进行，最终统一回到 `Nexp` 空间报告
 - **多指标评估**：当前实现 `RMSE`、`MAE`、`R²`、`MAPE`、`COV`
@@ -46,7 +46,7 @@
 
 - `pandas`
 - `numpy`
-- `xgboost`
+- `xgboost`（当前默认 backbone）
 - `scikit-learn`
 - `optuna`
 - `matplotlib`
@@ -65,7 +65,7 @@ pip install -r requirements.txt
 ## 项目结构
 
 ```text
-xgboost/
+cfst_predictitor/
 ├── config/
 │   ├── config.yaml
 │   └── experiments/
@@ -135,7 +135,7 @@ python train.py --config config/config.yaml
 指定输出目录：
 
 ```bash
-python train.py --config config/config.yaml --output output/xgboost_model
+python train.py --config config/config.yaml --output output/model_run
 ```
 
 ## 配置说明
@@ -152,7 +152,7 @@ python train.py --config config/config.yaml --output output/xgboost_model
 
 ```yaml
 data:
-  file_path: "data/processed/2026.3.9-11864_feature_parameters_raw.csv"
+  file_path: "data/processed/final_feature_parameters_raw.csv"
   target_column: "Nexp (kN)"
   target_mode: "eta_u_over_npl"
   target_transform:
@@ -176,6 +176,7 @@ data:
     high_weight: 1.5
 
 model:
+  backbone: "xgboost"  # 当前默认主线；也支持 rf / random_forest / mlp / lightgbm / lgbm / catboost
   params:
     objective: "reg:squarederror"
     max_depth: 5
@@ -215,7 +216,7 @@ cv:
 
 说明：
 
-- 当前代码强制要求 XGBoost 参数定义在 `config.model.params`。
+- 当前默认主线通过 `config.model.backbone: xgboost` + `config.model.params` 配置 XGBoost 参数；切换其他 backbone 时，`config.model.params` 对应切换为该模型自己的参数域。
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
 - 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
@@ -277,7 +278,7 @@ output/eta_u_over_npl_log_original_default_optuna100/
     └── xgboost_model_test_feature_ranking.txt
 ```
 
-如果显式传入 `--output output/xgboost_model`，则会改写到你指定的目录。
+如果显式传入 `--output output/model_run`，则会改写到你指定的目录。
 
 非默认主线的对照实验、特征实验和迭代优化实验，统一写入：
 
@@ -309,7 +310,7 @@ output/eta_u_over_npl_log_original_default_optuna100/
 
 当前 `predict.py` 的真实行为是：
 
-- 从模型目录加载 `xgboost_model.pkl`、`preprocessor.pkl`、`feature_names.json`、`training_metadata.json`
+- 从模型目录加载模型工件（当前默认文件名为 `xgboost_model.pkl`），以及 `preprocessor.pkl`、`feature_names.json`、`training_metadata.json`
 - 读取输入 CSV
 - 假定输入是已经由 `scripts/compute_feature_parameters.py` 生成的 processed 特征表
 - 当模型主线为 `eta_u_over_npl` 或 `r_over_npl` 时，输入需要包含 `Npl (kN)`，但不需要提供 `eta_u`、`r` 或 `Nexp (kN)`
@@ -333,10 +334,10 @@ python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 -
 
 ### 单条预测
 
-当前实现不是交互式输入，而是：
+当前实现不是交互式输入。建议复用现有 processed 数据文件并启用 `--single`：
 
 ```bash
-python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/one_row_feature_parameters_raw.csv --single
+python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/final_feature_parameters_raw.csv --single
 ```
 
 在 `--single` 模式下：
@@ -444,13 +445,21 @@ python train.py --config config/config.yaml
 
 ## 测试与验证
 
-运行测试：
+文档变更的最小验证（smoke）建议：
+
+1. 验证 README 中引用的关键路径与文件存在：
+
+```bash
+ls config/config.yaml data/processed/final_feature_parameters_raw.csv train.py predict.py
+```
+
+2. 运行测试套件：
 
 ```bash
 pytest -q
 ```
 
-运行语法检查：
+3. 可选语法检查：
 
 ```bash
 python -m compileall train.py predict.py src tests

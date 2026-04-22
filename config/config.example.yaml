@@ -2,9 +2,10 @@
 # 说明：
 # - 该文件用于说明“当前训练代码支持什么”，不是推荐你直接覆盖 config.yaml
 # - 当前默认主线仍是 eta_u_over_npl + log + KeML
-# - Box-Cox 目标变换当前仅作为实验支持，不代表已经纳入正式主线
+# - Box-Cox 目标变换当前仍主要作为实验路线支持，不代表已经纳入正式主线
 # - predict.py 主要依赖模型目录中的 training_metadata.json，而不是直接读取本 YAML
 # - 当前 train.py 真正从 paths 中读取的只有 output_dir；其余产物文件名由代码固定
+# - model.backbone 默认 xgboost；旧配置不写该字段时会自动回退到 xgboost
 # - model.params 是 XGBoost 的基础参数入口；当 use_optuna: false 且 best_params_path 中存在 context_hash 匹配的历史快照时，训练会优先复用该快照覆盖基础参数
 # - validation_size / early_stopping_rounds / eval_metric 当前只用于 CV / Optuna 的折内验证与选模，不用于最终 full-train refit
 
@@ -29,8 +30,8 @@ data:
     enabled: true
     # 当前代码支持：
     # - log
-    # - boxcox_<lambda>  （实验支持）
-    #   例如：boxcox_0.25 / boxcox_0.50 / boxcox_0.75 / boxcox_1.00
+    # - boxcox_<lambda>  （当前仍主要用于实验）
+    #   例如：boxcox_0.25 / boxcox_0.50 / boxcox_0.75 / boxcox_1.00 / boxcox_1.20
     # 默认主线仍建议保持 log
     type: "log"
 
@@ -71,8 +72,12 @@ data:
 # 2. 模型与调参配置
 # =========================
 model:
+  # 当前支持 xgboost / xgb / rf / random_forest / mlp / mlp_regressor / lightgbm / lgbm / catboost；未配置时默认 xgboost（兼容旧配置）
+  backbone: "xgboost"
   params:
-    # 当前 train.py 只接受这里作为 XGBoost 基础参数入口；Optuna 搜索空间也围绕这些值展开
+    # 这里是当前 active backbone 的参数入口；默认主线仍使用 XGBoost 这一组参数
+    # 切到 rf / mlp / lightgbm / catboost 时，应替换为对应模型自己的 params。
+    # 其中 rf / mlp 可直接使用内置 defaults；lightgbm / catboost 需要先安装对应依赖。
     objective: "reg:squarederror"
     max_depth: 5
     learning_rate: 0.0451669400461485
@@ -106,7 +111,7 @@ model:
   validation_size: 0.15
 
   # 当前选模目标实际依赖 RMSE / R² / COV 的组合；score 基于 reported target 空间计算
-  # metric_space 字段当前主要起语义标记作用，建议保持 original_nexp
+  # metric_space 会被代码校验，并参与选模目标的解释与一致性检查；建议保持 original_nexp
   selection_objective:
     metric_space: "original_nexp"
     rmse_normalizer: "mean_actual"
