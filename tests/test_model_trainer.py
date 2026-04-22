@@ -237,6 +237,28 @@ def test_model_trainer_accepts_xgb_backbone_alias(monkeypatch):
     assert RecordingRegressor.last_fit_kwargs is not None
 
 
+def test_finalize_params_after_cv_uses_backbone_adapter_behavior():
+    trainer = ModelTrainer(
+        params={"n_estimators": 200, "device": "cpu", "n_jobs": -1, "random_state": 42},
+        backbone="xgboost",
+        validation_size=0.0,
+    )
+
+    finalized_params, fold_best_iterations = trainer.finalize_params_after_cv(
+        {
+            "fold_details": [
+                {"best_iteration": 9},
+                {"best_iteration": 11},
+                {"best_iteration": None},
+                {"best_iteration": 13},
+            ]
+        }
+    )
+
+    assert finalized_params["n_estimators"] == 12
+    assert fold_best_iterations == [10, 12, 14]
+
+
 def test_cross_validate_restores_report_space_metrics_for_eta_u_target(monkeypatch):
     trainer = ModelTrainer(
         params={"device": "cpu", "n_jobs": -1, "random_state": 42},

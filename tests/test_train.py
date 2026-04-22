@@ -5,6 +5,7 @@ from sklearn.model_selection import KFold
 
 from train import (
     build_cv_splitter,
+    build_model_params,
     build_sample_weights,
     build_study_name,
     get_cv_n_splits,
@@ -14,8 +15,8 @@ from train import (
     make_selection_metrics_cv,
     make_serializable_cv_results,
     normalize_model_backbone,
-    select_final_n_estimators,
 )
+from src.model_trainer import ModelTrainer
 
 
 def test_build_cv_splitter_uses_config_values():
@@ -55,8 +56,14 @@ def test_get_cv_n_splits_returns_integer_value():
     assert get_cv_n_splits({"n_splits": 7}) == 7
 
 
-def test_select_final_n_estimators_uses_median_best_iteration_plus_one():
-    final_n_estimators, fold_best_iterations = select_final_n_estimators(
+def test_xgboost_finalize_params_after_cv_uses_median_best_iteration_plus_one():
+    trainer = ModelTrainer(
+        params={"n_estimators": 200, "device": "cpu", "n_jobs": -1, "random_state": 42},
+        backbone="xgboost",
+        validation_size=0.0,
+    )
+
+    finalized_params, fold_best_iterations = trainer.finalize_params_after_cv(
         {
             "fold_details": [
                 {"best_iteration": 9},
@@ -64,11 +71,10 @@ def test_select_final_n_estimators_uses_median_best_iteration_plus_one():
                 {"best_iteration": None},
                 {"best_iteration": 13},
             ]
-        },
-        fallback=200,
+        }
     )
 
-    assert final_n_estimators == 12
+    assert finalized_params["n_estimators"] == 12
     assert fold_best_iterations == [10, 12, 14]
 
 
@@ -198,7 +204,23 @@ def test_normalize_model_backbone_accepts_case_insensitive_xgboost():
 
 def test_normalize_model_backbone_rejects_unsupported_values():
     with pytest.raises(ValueError, match="Unsupported config.model.backbone"):
-        normalize_model_backbone("lightgbm")
+        normalize_model_backbone("unknown")
+
+
+def test_build_model_params_requires_full_xgboost_param_set():
+    with pytest.raises(ValueError, match="missing required keys"):
+        build_model_params(
+            model_config={"params": {"objective": "reg:squarederror"}},
+            model_backbone="xgboost",
+        )
+
+
+def test_build_model_params_allows_rf_defaults_without_explicit_params():
+    model_config = {}
+
+    params = build_model_params(model_config=model_config, model_backbone="rf")
+
+    assert params == {}
 
 
 def test_build_study_name_includes_backbone_prefix():

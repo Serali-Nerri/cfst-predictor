@@ -112,14 +112,10 @@ def plot_feature_importance(model: Any, feature_names: List[str],
     logger.info("Generating feature importance plot")
 
     try:
-        # Check if model has feature_importances_
-        if not hasattr(model, 'feature_importances_'):
-            error_msg = "Model does not have feature_importances_ attribute"
-            logger.error(error_msg)
-            raise AttributeError(error_msg)
-
-        # Get feature importances
-        importances = model.feature_importances_
+        importances = getattr(model, 'feature_importances_', None)
+        if importances is None:
+            logger.info("Skipping feature importance plot because model has no usable feature_importances_")
+            return
 
         if len(importances) != len(feature_names):
             error_msg = f"Feature count mismatch: {len(importances)} importances vs {len(feature_names)} names"
@@ -199,14 +195,10 @@ def print_feature_importance_ranking(model: Any, feature_names: List[str],
     logger.info("Generating feature importance ranking")
 
     try:
-        # Check if model has feature_importances_
-        if not hasattr(model, 'feature_importances_'):
-            error_msg = "Model does not have feature_importances_ attribute"
-            logger.error(error_msg)
-            raise AttributeError(error_msg)
-
-        # Get feature importances
-        importances = model.feature_importances_
+        importances = getattr(model, 'feature_importances_', None)
+        if importances is None:
+            logger.info("Skipping feature importance ranking because model has no usable feature_importances_")
+            return pd.DataFrame(columns=['feature', 'importance'])
 
         # Create DataFrame
         importance_df = pd.DataFrame({

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Prediction Script for CFST XGBoost Pipeline
+Prediction script for the CFST backbone pipeline.
 
-This script makes predictions using a trained XGBoost model:
+This script makes predictions using a trained model directory:
 1. Load trained model and preprocessor
 2. Load input data
 3. Make predictions
@@ -58,7 +58,7 @@ def make_predictions(model_dir: str, input_data_path: str,
         Exception: If any step fails
     """
     logger.info("=" * 80)
-    logger.info("CFST XGBOOST PIPELINE - PREDICTION STARTED")
+    logger.info("CFST BACKBONE PIPELINE - PREDICTION STARTED")
     logger.info("=" * 80)
 
     # Step 1: Load model and artifacts
@@ -156,7 +156,7 @@ def make_predictions(model_dir: str, input_data_path: str,
 def main():
     """Main entry point for the prediction script."""
     parser = argparse.ArgumentParser(
-        description='Make predictions with trained CFST XGBoost Model',
+        description='Make predictions with a trained CFST backbone model',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

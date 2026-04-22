@@ -37,8 +37,11 @@ data:
     min_stratum_size: 12
 
 model:
+  # Supported: xgboost / rf / random_forest / mlp / lightgbm / lgbm / catboost
+  # Omit backbone to keep the legacy default xgboost path.
   backbone: "xgboost"
   params:
+    # These params belong to the active backbone. The default config below is for xgboost.
     objective: "reg:squarederror"
     max_depth: 5
     learning_rate: 0.0451669400461485

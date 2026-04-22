@@ -1,5 +1,5 @@
 '''
-Model Utilities Module for CFST XGBoost Pipeline
+Model utilities module for the CFST backbone pipeline
 
 This module handles saving and loading trained models, preprocessors, and metadata.
 '''
@@ -8,7 +8,7 @@ import joblib
 import json
 import numpy as np
 from pathlib import Path
-from typing import Tuple, List, Any, Optional, Dict
+from typing import Tuple, List, Any, Optional, Dict, cast
 import pandas as pd
 
 from src.utils.logger import get_logger
@@ -174,11 +174,11 @@ def save_model(
     Save trained model, preprocessor, and metadata.
 
     Args:
-        model: Trained XGBoost model
+        model: Trained model object
         preprocessor: Fitted preprocessor
         feature_names: List of feature names
         output_dir: Output directory path
-        model_name: Model file name (default: xgboost_model.pkl)
+        model_name: Model file name (default: legacy xgboost_model.pkl)
         preprocessor_name: Preprocessor file name (default: preprocessor.pkl)
         feature_names_name: Feature names file name (default: feature_names.json)
         metadata: Additional metadata to save (optional)
@@ -313,7 +313,7 @@ def load_model_from_directory(
 
     Args:
         model_dir: Directory containing model artifacts
-        model_name: Model file name (default: xgboost_model.pkl)
+        model_name: Model file name (default: legacy xgboost_model.pkl)
         preprocessor_name: Preprocessor file name (default: preprocessor.pkl)
         feature_names_name: Feature names file name (default: feature_names.json)
 
@@ -328,8 +328,12 @@ def load_model_from_directory(
         metadata_name=DEFAULT_METADATA_NAME,
     )
 
+    model_path = resolved_paths["model"]
+    if model_path is None:
+        raise FileNotFoundError(f"Required model artifact not found under {model_dir}")
+
     return load_model(
-        resolved_paths["model"],
+        cast(str, model_path),
         resolved_paths["preprocessor"],
         resolved_paths["feature_names"],
     )

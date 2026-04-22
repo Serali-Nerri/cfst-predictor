@@ -1,6 +1,6 @@
 """Backbone adapter contracts for model training."""
 
-from typing import Any, Dict, Optional, Protocol
+from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import pandas as pd
 from optuna.trial import Trial
@@ -40,4 +40,11 @@ class BackboneAdapter(Protocol):
         sample_weight: Optional[pd.Series] = None,
         sample_weight_eval_set: Optional[pd.Series] = None,
     ) -> Any:
+        ...
+
+    def finalize_after_cv(
+        self,
+        params: Dict[str, Any],
+        cv_results: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[int]]:
         ...

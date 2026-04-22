@@ -176,6 +176,7 @@ data:
     high_weight: 1.5
 
 model:
+  backbone: "xgboost"  # 当前默认主线；也支持 rf / random_forest / mlp / lightgbm / lgbm / catboost
   params:
     objective: "reg:squarederror"
     max_depth: 5
@@ -215,7 +216,7 @@ cv:
 
 说明：
 
-- 当前默认主线通过 `config.model.params` 配置 XGBoost 参数（保持与既有配置兼容）。
+- 当前默认主线通过 `config.model.backbone: xgboost` + `config.model.params` 配置 XGBoost 参数；切换其他 backbone 时，`config.model.params` 对应切换为该模型自己的参数域。
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
 - 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。

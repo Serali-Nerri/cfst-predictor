@@ -1,6 +1,6 @@
 """XGBoost backbone adapter."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -167,6 +167,24 @@ class XGBoostBackboneAdapter:
         model = xgb.XGBRegressor(**model_params)
         model.fit(X_train, y_train, **fit_kwargs)
         return model
+
+    def finalize_after_cv(
+        self,
+        params: Dict[str, Any],
+        cv_results: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[int]]:
+        finalized_params = params.copy()
+        fold_details = cv_results.get("fold_details", [])
+        best_iterations = [
+            int(detail["best_iteration"]) + 1
+            for detail in fold_details
+            if detail.get("best_iteration") is not None
+        ]
+        if not best_iterations:
+            return finalized_params, []
+
+        finalized_params["n_estimators"] = int(np.median(np.asarray(best_iterations, dtype=int)))
+        return finalized_params, best_iterations
 
 
 register_backbone_adapter("xgboost", XGBoostBackboneAdapter)

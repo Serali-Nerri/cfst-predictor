@@ -26,18 +26,6 @@ from src.preprocessor import Preprocessor
 
 logger = get_logger(__name__)
 
-TUNABLE_PARAM_KEYS = (
-    "max_depth",
-    "learning_rate",
-    "n_estimators",
-    "subsample",
-    "colsample_bytree",
-    "min_child_weight",
-    "reg_alpha",
-    "reg_lambda",
-    "gamma",
-)
-
 OPTUNA_SEARCH_SPACE_VERSION = "centered_v4_stratified_consistent_cv"
 VALID_METRIC_SPACES = {"transformed", "original"}
 VALID_SELECTION_METRIC_SPACES = {"original_nexp", "report_target"}
@@ -262,10 +250,16 @@ class ModelTrainer:
         )
         logger.debug(f"Initial parameters: {json.dumps(self.params, indent=2)}")
 
-    @staticmethod
-    def _get_default_params() -> Dict[str, Any]:
-        """Get default parameters for the default backbone."""
-        return resolve_backbone_adapter("xgboost").get_default_params()
+    def get_default_params(self) -> Dict[str, Any]:
+        """Get default parameters for the active backbone."""
+        return self.backbone_adapter.get_default_params()
+
+    def finalize_params_after_cv(
+        self,
+        cv_results: Dict[str, Any],
+    ) -> Tuple[Dict[str, Any], List[int]]:
+        """Let the active backbone finalize params after cross-validation."""
+        return self.backbone_adapter.finalize_after_cv(self.params, cv_results)
 
     def get_optuna_center_point(self) -> Dict[str, Any]:
         """Return the current Optuna center point derived from model params."""

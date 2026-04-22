@@ -43,7 +43,8 @@ from src.data_loader import DataLoader
 from src.preprocessor import Preprocessor
 from src.model_trainer import ModelTrainer, OPTUNA_SEARCH_SPACE_VERSION
 from src.evaluator import Evaluator
-from src.utils.model_utils import _make_serializable, save_model
+from src.utils.model_utils import LEGACY_MODEL_NAME, _make_serializable, save_model
+from src.backbones import list_backbone_adapters
 from src.splitting import (
     build_regression_stratification_labels,
     get_split_strategy,
@@ -56,7 +57,8 @@ from src.visualizer import (
 logger = setup_logger(__name__)
 
 
-XGB_PARAM_KEYS = {
+DEFAULT_MODEL_BACKBONE = "xgboost"
+XGBOOST_REQUIRED_PARAM_KEYS = {
     "objective",
     "max_depth",
     "learning_rate",
@@ -72,10 +74,8 @@ XGB_PARAM_KEYS = {
     "device",
     "n_jobs",
 }
-
-REQUIRED_MODEL_PARAM_KEYS = XGB_PARAM_KEYS.copy()
-DEFAULT_MODEL_BACKBONE = "xgboost"
-SUPPORTED_MODEL_BACKBONES = {DEFAULT_MODEL_BACKBONE, "xgb"}
+SUPPORTED_MODEL_BACKBONES = set(list_backbone_adapters())
+SUPPORTED_MODEL_BACKBONE_ALIASES = sorted(SUPPORTED_MODEL_BACKBONES | {"xgb"})
 
 
 def normalize_model_backbone(backbone: Optional[Any]) -> str:
@@ -90,12 +90,15 @@ def normalize_model_backbone(backbone: Optional[Any]) -> str:
             f"Got {type(backbone).__name__}."
         )
 
-    if normalized not in SUPPORTED_MODEL_BACKBONES:
+    if normalized == "xgb":
+        normalized = DEFAULT_MODEL_BACKBONE
+
+    if normalized not in SUPPORTED_MODEL_BACKBONE_ALIASES:
         raise ValueError(
             f"Unsupported config.model.backbone '{backbone}'. "
-            f"Expected one of {sorted(SUPPORTED_MODEL_BACKBONES)}."
+            f"Expected one of {SUPPORTED_MODEL_BACKBONE_ALIASES}."
         )
-    return DEFAULT_MODEL_BACKBONE if normalized == "xgb" else normalized
+    return normalized
 
 
 def get_backbone_model_stem(model_backbone: str) -> str:
@@ -234,32 +237,44 @@ def build_versioned_study_name(
     return f"{base_study_name}__{tuning_fingerprint}"
 
 
-def build_xgb_params(model_config: Dict[str, Any]) -> Dict[str, Any]:
+def build_model_params(
+    model_config: Dict[str, Any],
+    model_backbone: str,
+) -> Dict[str, Any]:
     """
-    Read model.params as the only valid hyperparameter source.
+    Read and validate model params by backbone.
+
+    For xgboost, keep existing strict validation.
+    For other backbones, allow config defaults and adapter defaults.
     """
-    legacy_top_level_keys = sorted(XGB_PARAM_KEYS.intersection(model_config.keys()))
-    if legacy_top_level_keys:
+    legacy_found = sorted(XGBOOST_REQUIRED_PARAM_KEYS.intersection(model_config.keys()))
+    if legacy_found:
         raise ValueError(
             "Legacy model hyperparameter keys at config.model top-level are not allowed: "
-            f"{legacy_top_level_keys}. Move them under config.model.params."
+            f"{legacy_found}. Move them under config.model.params."
         )
 
     params = model_config.get("params")
-    if not isinstance(params, dict) or not params:
-        raise ValueError(
-            "config.model.params must be a non-empty dictionary and is the only valid "
-            "location for XGBoost hyperparameters."
-        )
+    if model_backbone == DEFAULT_MODEL_BACKBONE:
+        if not isinstance(params, dict) or not params:
+            raise ValueError(
+                "config.model.params must be a non-empty dictionary and is the only valid "
+                "location for XGBoost hyperparameters."
+            )
 
-    missing_required = sorted(
-        key for key in REQUIRED_MODEL_PARAM_KEYS if key not in params
-    )
-    if missing_required:
-        raise ValueError(
-            f"config.model.params is missing required keys: {missing_required}"
+        missing_required = sorted(
+            key for key in XGBOOST_REQUIRED_PARAM_KEYS if key not in params
         )
+        if missing_required:
+            raise ValueError(
+                f"config.model.params is missing required keys for xgboost: {missing_required}"
+            )
+        return params.copy()
 
+    if not params:
+        return {}
+    if not isinstance(params, dict):
+        raise ValueError("config.model.params must be a dictionary when provided.")
     return params.copy()
 
 
@@ -323,19 +338,6 @@ def build_target_metadata(
             "derived_columns": list(derived_columns),
         },
     }
-
-
-def select_final_n_estimators(cv_results: Dict[str, Any], fallback: int) -> Tuple[int, List[int]]:
-    """Select a final tree count from CV best_iteration values."""
-    fold_details = cast(List[Dict[str, Any]], cv_results.get("fold_details", []))
-    best_iterations = [
-        int(detail["best_iteration"]) + 1
-        for detail in fold_details
-        if detail.get("best_iteration") is not None
-    ]
-    if not best_iterations:
-        return int(fallback), []
-    return int(np.median(np.asarray(best_iterations, dtype=int))), best_iterations
 
 
 def make_selection_metrics_cv(cv_results: Dict[str, Any]) -> Dict[str, Any]:
@@ -609,7 +611,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         Exception: If any step in the pipeline fails
     """
     logger.info("=" * 80)
-    logger.info("CFST XGBOOST PIPELINE - TRAINING STARTED")
+    logger.info("CFST BACKBONE PIPELINE - TRAINING STARTED")
     logger.info("=" * 80)
 
     try:
@@ -685,8 +687,8 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         logger.info(f"Target mode: {target_mode}")
         logger.info(f"KeML residual split enabled: {use_keml_residual_split}")
 
-        # Validate XGBoost params early so study naming matches the real tuning config.
-        xgb_params = build_xgb_params(model_config)
+        # Validate params early so study naming matches the real tuning config.
+        model_params = build_model_params(model_config=model_config, model_backbone=model_backbone)
 
         training_context = build_training_context(
             data_file_path=data_path,
@@ -707,7 +709,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         )
         context_hash = training_context["context_hash"]
         tuning_fingerprint = build_optuna_tuning_fingerprint(
-            xgb_params,
+            model_params,
             cv_config,
             model_backbone,
             optuna_metric_space,
@@ -857,7 +859,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
         cv_splitter = build_cv_splitter(cv_config, effective_split_strategy)
 
         trainer = ModelTrainer(
-            params=xgb_params,
+            params=model_params,
             backbone=model_backbone,
             use_optuna=use_optuna,
             n_trials=n_trials,
@@ -932,13 +934,13 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             f"(+/- {cv_results['std_cv_score']:.4f})"
         )
 
-        final_n_estimators, fold_best_iterations = select_final_n_estimators(
-            cv_results,
-            fallback=int(trainer.params.get("n_estimators", xgb_params["n_estimators"])),
+        finalized_params, fold_best_iterations = trainer.finalize_params_after_cv(
+            cv_results
         )
-        trainer.params["n_estimators"] = final_n_estimators
+        trainer.params.update(finalized_params)
+        final_n_estimators = int(trainer.params.get("n_estimators", 200))
         logger.info(
-            "Selected final n_estimators=%s from CV fold best_iteration values=%s",
+            "Finalized model params after CV: n_estimators=%s, fold_best_iterations=%s",
             final_n_estimators,
             fold_best_iterations,
         )
@@ -1198,11 +1200,17 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
             },
         }
 
+        output_model_name = (
+            LEGACY_MODEL_NAME
+            if model_backbone == DEFAULT_MODEL_BACKBONE
+            else f"{model_name_stem}.pkl"
+        )
         save_model(
             model=model,
             preprocessor=preprocessor,
             feature_names=feature_names,
             output_dir=output_dir,
+            model_name=output_model_name,
             metadata=metadata,
         )
 
@@ -1327,7 +1335,7 @@ def train_model(config_path: str, output_dir: Optional[str] = None) -> Dict[str,
 def main():
     """Main entry point for the training script."""
     parser = argparse.ArgumentParser(
-        description="Train CFST XGBoost Model",
+        description="Train CFST model with the configured backbone",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
