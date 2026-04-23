@@ -5,16 +5,17 @@
 本项目构建了一个面向混凝土填充钢管（CFST）柱极限承载力预测的机器学习流水线，当前默认 `backbone` 为 `XGBoost`，并保持既有 XGBoost 训练/推理路径兼容，覆盖以下当前已实现的能力：
 
 - 从已处理的特征 CSV 加载数据并提取报告目标列
-- 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`eta_u = Nexp / Npl`、`r = (Nexp - Npl) / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family` 等派生列
-- 先划分训练/测试集，再进行预处理，避免预处理数据泄漏
-- 按配置剔除指定特征列
-- 训练默认 `XGBoost` 回归器（当前主线实现）
-- 可选使用 `Optuna` 做超参数搜索
-- 在交叉验证各折内部切验证集支持 `early_stopping_rounds`
+- 由 `scripts/compute_feature_parameters.py` 离线生成 `Npl (kN)`、`eta_u = Nexp / Npl`、`r = (Nexp - Npl) / Npl`、`b/h`、`L/h`、`axial_flag`、`section_family`、`lambda_bar`、`e/h`、`e_bar`、`r0/h`、`b/t`、`ke`、`xi` 等派生列
+- 默认按 `regression_stratified` 策略先划分训练/测试集，再进行预处理，避免预处理数据泄漏；当稳定分层条件不足时自动回退为随机切分
+- 按配置剔除指定特征列，并在预处理阶段自动过滤不适合训练的列
+- 支持 `xgboost` / `xgb`、`rf` / `random_forest`、`mlp` / `mlp_regressor`、`lightgbm` / `lgbm`、`catboost` 等 backbone，当前默认主线为 XGBoost
+- 可选使用 `Optuna` 做超参数搜索，并通过 `context_hash` + 调参指纹隔离最优参数复用范围
+- 对支持验证早停的 backbone，在交叉验证各 fold 内部切验证集支持 `early_stopping_rounds`
 - 按 `config.cv` 中的 `n_splits` / `shuffle` / `random_state` 执行交叉验证
 - 以 `CV` 复合目标选择模型，并在 `train_full` 上重训最终模型
+- 支持可选样本加权（当前为 `e/h` 阈值策略）
 - 输出训练/测试指标、交叉验证结果、可比较的 `regime_analysis`、图表与模型产物
-- 从已保存模型目录加载模型并进行 CSV 批量预测
+- 从已保存模型目录加载模型并进行 CSV 批量预测；优先读取 `artifact_manifest.json`，没有时回退 legacy 命名
 
 当前默认主线已经切换为：
 
@@ -31,9 +32,9 @@
 - **严格参数入口**：默认 XGBoost 参数从 `config.model.params` 读取
 - **上下文隔离的最优参数复用**：通过 `context_hash` 约束 `logs/best_params_*.json` 的复用范围
 - **目标空间分离**：训练可在 `eta_u` / `r` 空间进行，最终统一回到 `Nexp` 空间报告
-- **多指标评估**：当前实现 `RMSE`、`MAE`、`R²`、`MAPE`、`COV`
+- **多指标评估**：当前实现 `RMSE`、`MAE`、`R²`、`MAPE`、`MSE`、`max_error`、`μ`、`COV`、`mean_ratio`、`std_ratio`、`a20-index`
 - **可比较的 regime analysis**：先在训练集拟合 regime schema，再对 train/test 共用同一套区间
-- **训练产物保存**：保存模型、预处理器、特征名、训练元数据与评估报告
+- **训练产物保存**：保存模型、预处理器、特征名、训练元数据、评估报告与 `artifact_manifest.json`
 
 数据集字段、几何统一口径与原始数据说明见：`doc/DATA_README.md`。
 
@@ -47,6 +48,8 @@
 - `pandas`
 - `numpy`
 - `xgboost`（当前默认 backbone）
+- `lightgbm`
+- `catboost`
 - `scikit-learn`
 - `optuna`
 - `matplotlib`
@@ -68,7 +71,9 @@ pip install -r requirements.txt
 cfst_predictitor/
 ├── config/
 │   ├── config.yaml
+│   ├── config.example.yaml
 │   └── experiments/
+│       ├── boxcox_scan/
 │       ├── compact_group_B_iterations/
 │       └── ...
 ├── data/
@@ -79,13 +84,17 @@ cfst_predictitor/
 │   ├── experiments/
 │   │   └── compact_group_B_iterations/
 │   └── ...
+├── notebooks/
 ├── output/
 │   ├── experiments/
 │   │   └── compact_group_B_iterations/
 │   └── ...
 ├── plan/
 ├── scripts/
+│   ├── compute_feature_parameters.py
+│   └── run_experiment_suite.py
 ├── src/
+│   ├── backbones/
 │   ├── data_loader.py
 │   ├── domain_features.py
 │   ├── evaluator.py
@@ -96,8 +105,11 @@ cfst_predictitor/
 │   ├── visualizer.py
 │   └── utils/
 ├── tests/
+│   ├── backbones/
+│   └── ...
 ├── train.py
 ├── predict.py
+├── pyrightconfig.json
 ├── requirements.txt
 └── README.md
 ```
@@ -108,9 +120,9 @@ cfst_predictitor/
 
 1. 读取 `config/config.yaml`
 2. 从已处理的特征 CSV 加载报告目标 `Nexp (kN)`，并按 `target_mode` 构造训练目标
-3. 训练前假定 `scripts/compute_feature_parameters.py` 已离线生成 `Npl / eta_u / r / b/h / L/h / axial_flag / section_family`
-4. 先划分 `train/test`
-5. 在 `train_full` 上执行 `CV` / `Optuna`；各 fold 内部按 `validation_size` 切验证集用于早停
+3. 训练前假定 `scripts/compute_feature_parameters.py` 已离线生成 `Npl / eta_u / r / b/h / L/h / axial_flag / section_family / lambda_bar / e/h / e_bar / r0/h / b/t / ke / xi`
+4. 默认按 `regression_stratified` 先划分 `train/test`；若稳定分层不足则自动回退为随机切分
+5. 在 `train_full` 上执行 `CV` / `Optuna`；对支持验证早停的 backbone，各 fold 内部按 `validation_size` 切验证集用于早停
 6. 使用 `CV` 复合目标选择参数，并根据各 fold `best_iteration` 选取最终 `n_estimators`
 7. 仅在完整 `train_full` 上 `fit` 预处理器与最终模型，不再永久留出最终验证集
 8. 统一在 `Nexp` 空间计算训练 / 测试 / CV 指标
@@ -174,9 +186,16 @@ data:
     threshold: 0.1
     base_weight: 1.0
     high_weight: 1.5
+  split:
+    strategy: "regression_stratified"
+    target_bins: 10
+    auxiliary_features:
+      - column: "lambda_bar"
+        bins: 3
+    min_stratum_size: 12
 
 model:
-  backbone: "xgboost"  # 当前默认主线；也支持 rf / random_forest / mlp / lightgbm / lgbm / catboost
+  backbone: "xgboost"  # 当前默认主线；也支持 xgb / rf / random_forest / mlp / mlp_regressor / lightgbm / lgbm / catboost
   params:
     objective: "reg:squarederror"
     max_depth: 5
@@ -193,6 +212,8 @@ model:
     device: "cpu"
     n_jobs: -1
   use_optuna: true
+  optuna_metric_space: "original"
+  cv_metric_space: "original"
   n_trials: 100
   optuna_timeout: 14400
   optuna_storage_url: "sqlite:///logs/optuna_study.db"
@@ -207,27 +228,54 @@ model:
     r2_threshold: 0.99
     cov_weight: 2.0
     r2_weight: 2.0
+  keml:
+    enabled: true
+    linear_ridge_alpha: 1.0
+    linear_features:
+      - "e/h"
+      - "lambda_bar"
+      - "b/h"
+      - "r0/h"
+      - "b/t"
+      - "ke"
+      - "xi"
+      - "L/h"
+      - "R (%)"
 
 cv:
   n_splits: 5
   random_state: 42
   shuffle: true
+
+evaluation:
+  regime_analysis:
+    enabled: true
+    reference_split: "train"
+    sort_metric: "cov"
+
+paths:
+  output_dir: "output/eta_u_over_npl_log_original_default_optuna100"
 ```
 
 说明：
 
 - 当前默认主线通过 `config.model.backbone: xgboost` + `config.model.params` 配置 XGBoost 参数；切换其他 backbone 时，`config.model.params` 对应切换为该模型自己的参数域。
+- 代码当前支持 `xgboost/xgb`、`rf/random_forest`、`mlp/mlp_regressor`、`lightgbm/lgbm`、`catboost`。
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
 - 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
 - 当前代码还支持 `boxcox_<lambda>` 形式的目标变换作为**实验支持**，用于协议探索和对照实验；它不是当前默认主线，也不代表最终 target 方案已经定稿。
+- `data.split.strategy` 当前默认是 `regression_stratified`；若稳定分层条件不足，代码会自动回退到随机切分。
 - `data.sample_weight.enabled` 用于开启/关闭样本加权；关闭时保持原始无权重训练路径。
 - 当前样本加权仅支持 `data.sample_weight.strategy: e_over_h_threshold`：当指定列（默认 `e/h`）大于 `threshold` 时使用 `high_weight`，其余样本使用 `base_weight`。
 - 样本加权会同时作用于 `Optuna`、训练阶段 `CV`、fold 内验证集拆分以及最终 `train_full` 重训。
-- `config.cv` 会同时控制 `Optuna` 调参和训练阶段输出的交叉验证报告；`cv.n_splits` 控制折数，`cv.shuffle` 与 `cv.random_state` 控制折分复现性。
+- `optuna_metric_space` 与 `cv_metric_space` 当前默认均为 `original`。
+- `config.cv` 会同时控制 `Optuna` 调参与训练阶段输出的交叉验证报告；`cv.n_splits` 控制折数，`cv.shuffle` 与 `cv.random_state` 控制折分复现性。
 - `selection_objective` 会在原始 `Nexp` 空间综合考虑 `RMSE / R² / COV`，而不是只按单一 RMSE 选模。
+- `model.keml` 当前用于配置知识增强线性分支及其特征。
+- 当前 `paths` 中真正被 `train.py` 读取的 YAML 路径项只有 `paths.output_dir`；其余工件文件名由代码侧统一管理。
 - 当 `use_optuna: true` 时，训练会先用 `CV` 复合目标调参，再在 `train_full` 上重训最终模型。
-- 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 `logs/best_params_*.json` 与当前 `context_hash` 匹配，则会自动加载最优参数。
+- 当 `use_optuna: false` 时，如果 `best_params_path` 指向的 JSON 与当前 `context_hash` 匹配，则会自动加载最优参数。
 
 ## 实验配置与结果目录约定
 
@@ -258,6 +306,7 @@ python train.py --config config/config.yaml
 
 ```text
 output/eta_u_over_npl_log_original_default_optuna100/
+├── artifact_manifest.json
 ├── xgboost_model.pkl
 ├── preprocessor.pkl
 ├── feature_names.json
@@ -290,7 +339,7 @@ output/eta_u_over_npl_log_original_default_optuna100/
 - `output/experiments/compact_group_B_iterations/`
 - `logs/experiments/compact_group_B_iterations/`
 
-当前仓库默认不会追踪新产生的 `output/` 结果目录；`output/experiments/` 是阶段性实验结果的聚合位置。默认主线的代表性输出如 `output/eta_u_over_npl_log_original_default_optuna100/` 仍可单独保留在根目录下。
+当前仓库默认不会追踪新产生的 `output/` 结果目录；`.gitignore` 当前对整个 `output/` 目录统一忽略。`output/experiments/` 是阶段性实验结果的聚合位置，默认主线输出如 `output/eta_u_over_npl_log_original_default_optuna100/` 也默认处于未追踪状态。
 
 ## 评估指标解释
 
@@ -302,17 +351,28 @@ output/eta_u_over_npl_log_original_default_optuna100/
 - `MAPE`
 - `MSE`
 - `max_error`
+- `μ`
 - `COV`
+- `mean_ratio`
+- `std_ratio`
+- `a20-index`
+- `n_samples`
 
-其中 `COV` 基于预测值与真实值之比的均值和样本标准差计算，用于描述预测离散性。
+其中：
+
+- `μ` / `mean_ratio` 表示预测值与真实值之比的均值
+- `std_ratio` 表示该比值的样本标准差
+- `COV` 基于预测值与真实值之比的均值和样本标准差计算，用于描述预测离散性
+- `a20-index` 表示预测值与真实值之比落在 `[0.8, 1.2]` 区间内的样本占比
 
 ## 预测使用手册
 
 当前 `predict.py` 的真实行为是：
 
-- 从模型目录加载模型工件（当前默认文件名为 `xgboost_model.pkl`），以及 `preprocessor.pkl`、`feature_names.json`、`training_metadata.json`
+- 从模型目录加载模型工件；优先根据 `artifact_manifest.json` 解析文件名，若不存在则回退到 legacy 命名（默认主线通常为 `xgboost_model.pkl`、`preprocessor.pkl`、`feature_names.json`、`training_metadata.json`）
 - 读取输入 CSV
 - 假定输入是已经由 `scripts/compute_feature_parameters.py` 生成的 processed 特征表
+- 按训练时保存的 `feature_names.json` 校验所需特征；若输入包含额外列，预测时会忽略这些额外列
 - 当模型主线为 `eta_u_over_npl` 或 `r_over_npl` 时，输入需要包含 `Npl (kN)`，但不需要提供 `eta_u`、`r` 或 `Nexp (kN)`
 - 在需要时将模型输出从 `eta_u` / `r` 空间恢复到 `Nexp`
 - 进行单条或批量预测
@@ -378,7 +438,8 @@ python train.py --config config/config.yaml
 
 1. 在训练数据上进行调参
 2. 将最优参数保存到 `best_params_path` 指向的 JSON 文件
-3. 在同一轮训练中使用最优参数重训最终模型
+3. 基于 `context_hash` 与调参策略指纹隔离 study 与参数快照的复用范围
+4. 在同一轮训练中使用最优参数重训最终模型
 
 ## 已知限制
 
@@ -450,7 +511,7 @@ python train.py --config config/config.yaml
 1. 验证 README 中引用的关键路径与文件存在：
 
 ```bash
-ls config/config.yaml data/processed/final_feature_parameters_raw.csv train.py predict.py
+ls config/config.yaml config/config.example.yaml data/processed/final_feature_parameters_raw.csv train.py predict.py scripts/compute_feature_parameters.py scripts/run_experiment_suite.py
 ```
 
 2. 运行测试套件：
@@ -462,7 +523,13 @@ pytest -q
 3. 可选语法检查：
 
 ```bash
-python -m compileall train.py predict.py src tests
+python -m compileall train.py predict.py src tests scripts
+```
+
+4. 如修改了默认配置、实验路由或训练产物命名，建议额外验证：
+
+```bash
+python -m pytest -q tests/test_experiment_configs.py tests/test_train.py tests/test_model_utils.py tests/test_predictor.py
 ```
 
 ## 后续建议（本轮未实现）

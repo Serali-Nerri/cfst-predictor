@@ -9,9 +9,11 @@
 
 ## Build, Test, and Development Commands
 - `python -m venv .venv && source .venv/bin/activate`: create and activate a local environment.
-- `pip install -r requirements.txt`: install runtime dependencies.
+- `pip install -r requirements.txt`: install runtime dependencies, including optional backbones now tracked in the main requirements file (`lightgbm`, `catboost`).
 - `python train.py --config config/config.yaml`: run the default `eta_u_over_npl + log` + KeML mainline and export artifacts to `output/eta_u_over_npl_log_original_default_optuna100`.
 - `python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv`: run batch prediction with the current default saved model.
+- `pytest -q`: run the full test suite from the repo root.
+- `python -m pytest -q tests/test_experiment_configs.py tests/test_train.py tests/test_model_utils.py tests/test_predictor.py`: run the focused regression checks for config routing, training flow, artifact loading, and prediction behavior.
 - `pyright`: run static type checking (configured by `pyrightconfig.json`).
 
 ## Coding Style & Naming Conventions
@@ -22,9 +24,9 @@
 
 ## Testing Guidelines
 - Add tests in `tests/` using `test_*.py` naming.
-- Use `pytest` style assertions for new coverage; run with `pytest -q`.
+- Use `pytest` style assertions for new coverage; run with `pytest -q` from the repo root.
 - For pipeline changes, include a smoke check by running `train.py --config config/config.yaml` and one `predict.py` command against the current default output directory from `config/config.yaml`.
-- For changes that touch default configs or experiment routing, run `pytest -q tests/test_experiment_configs.py tests/test_train.py`.
+- For changes that touch default configs, experiment routing, artifact resolution, or prediction loading, run `pytest -q tests/test_experiment_configs.py tests/test_train.py tests/test_model_utils.py tests/test_predictor.py`.
 
 ## Commit & Pull Request Guidelines
 - Current history mixes styles; standardize on Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
