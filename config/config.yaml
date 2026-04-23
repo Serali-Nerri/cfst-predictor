@@ -14,8 +14,21 @@ data:
     - "h (mm)"
     - "r0 (mm)"
     - "t (mm)"
+    - "R (%)"
     - "L (mm)"
+    - "e1 (mm)"
+    - "e2 (mm)"
+    - "r0/h"
+    - "b/t"
+    - "Ac (mm^2)"
+    - "As (mm^2)"
+    - "xi"
+    - "sigma_re (MPa)"
     - "lambda"
+    - "Npl (kN)"
+    - "L/h"
+    - "axial_flag"
+    - "section_family"
 
   test_size: 0.2
   random_state: 42
@@ -80,15 +93,11 @@ model:
     enabled: true
     linear_ridge_alpha: 1.0
     linear_features:
-      - "e/h"
-      - "lambda_bar"
-      - "b/h"
-      - "r0/h"
-      - "b/t"
       - "ke"
-      - "xi"
-      - "L/h"
-      - "R (%)"
+      - "lambda_bar"
+      - "e/h"
+      - "e_bar"
+      - "e1/e2"
 
 cv:
   n_splits: 5

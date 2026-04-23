@@ -497,3 +497,72 @@
   - `B6` 虽然在 `R² / RMSE / μ` 上略有改善，但核心 `COV` 没有变好，`MAE / a20-index` 也没有改善。
 - 同时，两组实验仍然表现出较明显的 train/test 差距，说明 **仅靠当前这版“全局方差”的 lognormal 近似，还不足以吸收现有误差结构**。
 - 因此，**当前实现形态下的 `lognormal likelihood` 暂不具备替代 `B4 / B6 + log` 主线的证据**；如果后续回看，应优先考虑显式输入依赖方差、联合 likelihood 或与 KeML 更自然兼容的概率实现。
+
+---
+
+## 14. 第九阶段：B4 + `log` 路线下的五模型 backbone 比较
+
+### 14.1 目标
+
+在前述实验已经基本说明：
+
+- `B4 + log` 是当前紧凑特征路线中更均衡的主候选组
+- `B6 + log` 更适合作为高拟合对照组
+- 继续围绕 Box-Cox / smearing / Gamma / Tweedie / 当前这版 heteroscedastic / lognormal 做轻量级 protocol 微调，尚未形成稳定突破
+
+因此，本阶段开始按研究定义文档中的模型池，在 **统一的 `B4 + log + KeML` 协议** 下，先完成一轮 backbone 层面的横向比较，观察不同模型在：
+
+- 拟合精度（`RMSE / MAE / R²`）
+- 工程口径稳定性（`μ / COV / a20-index`）
+
+上的相对表现。
+
+本轮纳入的模型包括：
+
+1. XGBoost
+2. Random Forest（RF）
+3. LightGBM
+4. CatBoost
+5. BP 神经网络（MLP）
+
+### 14.2 统一实验口径
+
+本轮五模型比较统一采用：
+
+- 特征路线：`B4`
+- 训练目标：`eta_u_over_npl`
+- 目标变换：`log`
+- 报告空间：原始 `Nexp (kN)`
+- 数据划分：`regression_stratified`
+- CV：5-fold
+- KeML：开启
+- backbone 参数：各模型使用各自 adapter 支持的参数域；非 XGBoost backbone 采用同口径 Optuna 100 轮搜索
+
+### 14.3 Test 集结果
+
+| Model | RMSE | MAE | R² | MAPE | μ | COV | a20-index |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| XGBoost | 441.35 | 151.11 | 0.9849 | 7.17% | 1.0103 | 0.1363 | 0.9399 |
+| RF | 455.21 | 162.47 | 0.9839 | 7.85% | 1.0109 | 0.1523 | 0.9405 |
+| LightGBM | 456.51 | 147.86 | 0.9839 | 6.82% | 1.0094 | 0.1308 | 0.9370 |
+| CatBoost | 463.66 | 152.13 | 0.9833 | 6.94% | 1.0114 | 0.1402 | 0.9463 |
+| MLP | 747.71 | 296.72 | 0.9567 | 14.94% | 1.0110 | 0.3096 | 0.7841 |
+
+### 14.4 阶段判断
+
+- **XGBoost 仍然是当前最稳妥的默认主线 backbone**：它在本轮比较中保持了最优的 `RMSE / R²`，整体仍然最均衡。
+- **LightGBM 是当前最强的竞争 backbone**：虽然它没有在 `RMSE / R²` 上超过 XGBoost，但它给出了本轮最低的 `COV`（`0.1308`），同时 `MAE / MAPE / μ` 也是最优，说明它在工程口径稳定性上非常有竞争力。
+- **CatBoost 值得保留为第二竞争 backbone**：它的 `a20-index` 最优（`0.9463`），但 `RMSE / R² / COV` 没有形成比 XGBoost 或 LightGBM 更强的整体优势。
+- **RF 可保留为经典树模型基线**：整体可用，但没有哪个关键指标真正优于 XGBoost / LightGBM。
+- **MLP 在当前统一框架下明显落后**：无论是 `RMSE / MAE / COV / a20-index` 还是整体工程稳定性，都显著弱于树模型，更适合作为覆盖模型类型的对照基线，而不是下一阶段主攻 backbone。
+
+### 14.5 本阶段统一结论
+
+- 在当前 **`B4 + log + KeML`** 统一协议下，**XGBoost 仍应保留为默认主线 backbone**。
+- **LightGBM 应进入下一轮重点公平比较主池**，因为它在 `COV / MAE / MAPE / μ` 上展现出最强竞争力。
+- **CatBoost 也应保留为重点竞争 backbone**，但优先级略低于 LightGBM。
+- **RF 保留为传统树模型基线，MLP 保留为神经网络对照基线**。
+- 这说明后续如果继续推进多模型比较，最值得集中资源深入的主池应优先放在：
+  1. XGBoost
+  2. LightGBM
+  3. CatBoost

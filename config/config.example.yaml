@@ -73,6 +73,7 @@ data:
 # =========================
 model:
   # 当前支持 xgboost / xgb / rf / random_forest / mlp / mlp_regressor / lightgbm / lgbm / catboost；未配置时默认 xgboost（兼容旧配置）
+  # 当前配置是“单一 active backbone”模式。
   backbone: "xgboost"
   params:
     # 这里是当前 active backbone 的参数入口；默认主线仍使用 XGBoost 这一组参数

@@ -24,6 +24,7 @@
 - `target_transform.type: log`
 - `model.keml.enabled: true`
 - `model.n_trials: 100`
+- 默认特征路线：`B4 = fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2, b/h`
 - 默认输出目录：`output/eta_u_over_npl_log_original_default_optuna100`
 
 ## 当前实现的核心特性
@@ -142,6 +143,7 @@ python train.py --config config/config.yaml
 - `target_transform.type: log`
 - `model.keml.enabled: true`
 - `n_trials: 100`
+- 默认特征路线：`B4 = fy, fc, Re, te, ke, lambda_bar, e/h, e_bar, e1/e2, b/h`
 - 默认输出目录：`output/eta_u_over_npl_log_original_default_optuna100`
 
 指定输出目录：
@@ -175,8 +177,21 @@ data:
     - "h (mm)"
     - "r0 (mm)"
     - "t (mm)"
+    - "R (%)"
     - "L (mm)"
+    - "e1 (mm)"
+    - "e2 (mm)"
+    - "r0/h"
+    - "b/t"
+    - "Ac (mm^2)"
+    - "As (mm^2)"
+    - "xi"
+    - "sigma_re (MPa)"
     - "lambda"
+    - "Npl (kN)"
+    - "L/h"
+    - "axial_flag"
+    - "section_family"
   test_size: 0.2
   random_state: 42
   sample_weight:
@@ -232,15 +247,11 @@ model:
     enabled: true
     linear_ridge_alpha: 1.0
     linear_features:
-      - "e/h"
-      - "lambda_bar"
-      - "b/h"
-      - "r0/h"
-      - "b/t"
       - "ke"
-      - "xi"
-      - "L/h"
-      - "R (%)"
+      - "lambda_bar"
+      - "e/h"
+      - "e_bar"
+      - "e1/e2"
 
 cv:
   n_splits: 5
@@ -260,10 +271,11 @@ paths:
 说明：
 
 - 当前默认主线通过 `config.model.backbone: xgboost` + `config.model.params` 配置 XGBoost 参数；切换其他 backbone 时，`config.model.params` 对应切换为该模型自己的参数域。
+- 当前配置是“单一 active backbone”模式。
 - 代码当前支持 `xgboost/xgb`、`rf/random_forest`、`mlp/mlp_regressor`、`lightgbm/lgbm`、`catboost`。
 - `target_mode: raw` 表示直接预测 `Nexp (kN)`；`target_mode: eta_u_over_npl` 和 `r_over_npl` 表示先在无量纲目标空间训练，最终仍回到 `Nexp` 空间汇报指标。
 - `target_transform` 作用于训练目标，而不是直接作用于报告目标；当前默认主线使用 `log(eta_u)` 训练，但最终仍回到 `Nexp` 空间汇报。
-- 当前默认主线是 `target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
+- 当前默认主线是 `B4 + target_mode: eta_u_over_npl + target_transform.enabled: true + target_transform.type: log + model.keml.enabled: true`。
 - 当前代码还支持 `boxcox_<lambda>` 形式的目标变换作为**实验支持**，用于协议探索和对照实验；它不是当前默认主线，也不代表最终 target 方案已经定稿。
 - `data.split.strategy` 当前默认是 `regression_stratified`；若稳定分层条件不足，代码会自动回退到随机切分。
 - `data.sample_weight.enabled` 用于开启/关闭样本加权；关闭时保持原始无权重训练路径。
