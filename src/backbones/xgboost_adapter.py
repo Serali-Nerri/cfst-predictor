@@ -5,8 +5,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from optuna.trial import Trial
 
+from src.backbones.base import OptunaTrialProtocol
 from src.backbones.registry import register_backbone_adapter
 
 
@@ -97,7 +97,7 @@ class XGBoostBackboneAdapter:
             },
         }
 
-    def build_optuna_trial_params(self, trial: Trial, params: Dict[str, Any]) -> Dict[str, Any]:
+    def build_optuna_trial_params(self, trial: OptunaTrialProtocol, params: Dict[str, Any]) -> Dict[str, Any]:
         search_space = self.get_optuna_search_space(params)
         tuned_params: Dict[str, Any] = {}
 

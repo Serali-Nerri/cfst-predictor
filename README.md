@@ -39,9 +39,15 @@
 
 数据集字段、几何统一口径与原始数据说明见：`doc/DATA_README.md`。
 
+## 统一截面表示
+
+本项目的多截面统一建模参考 Lin.2021 的等效圆柱思路，将圆形、方形、矩形、圆端形等 CFST 截面在钢材面积与混凝土面积等效的条件下映射到统一的等效截面参数空间。默认模型不直接使用 `section_family` 作为类别输入，而是通过 `Re`、`te`、`ke`、`b/h`、`lambda_bar`、`e/h`、`e_bar`、`e1/e2` 以及以 `Npl (kN)` 为基准构造的无量纲目标来表达截面形状、稳定和偏心效应。
+
+`section_family` 仍保留在数据中，主要用于 regime analysis、分组残差诊断和消融实验。该统一表示不等同于忽略截面差异，也不意味着已经证明所有截面族的外推性能完全一致；相关分组评估应作为论文主结果的配套证据。
+
 ## 环境要求
 
-- Python 3.8+
+- 推荐 Python 3.11 或 3.12 作为公开复现基线
 - 推荐在虚拟环境中运行
 
 依赖见 `requirements.txt`，主要包括：
@@ -64,6 +70,12 @@
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+开发和验证依赖：
+
+```bash
+pip install -r requirements-dev.txt
 ```
 
 ## 项目结构

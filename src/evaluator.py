@@ -47,10 +47,8 @@ def _calculate_ratio_statistics(
     y_true: np.ndarray,
     y_pred: np.ndarray,
 ) -> Dict[str, Optional[float]]:
-    ratios = y_pred / y_true
-    valid_mask = np.isfinite(ratios) & (y_true != 0)
-    valid_ratios = ratios[valid_mask]
-    if len(valid_ratios) == 0:
+    valid_mask = (y_true != 0) & np.isfinite(y_true) & np.isfinite(y_pred)
+    if not valid_mask.any():
         return {
             "mu": None,
             "cov": None,
@@ -58,6 +56,7 @@ def _calculate_ratio_statistics(
             "std_ratio": None,
             "a20_index": None,
         }
+    valid_ratios = y_pred[valid_mask] / y_true[valid_mask]
 
     mu = float(np.mean(valid_ratios))
     std_ratio = float(np.std(valid_ratios, ddof=1)) if len(valid_ratios) > 1 else 0.0

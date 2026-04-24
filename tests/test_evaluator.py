@@ -1,3 +1,5 @@
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -17,7 +19,23 @@ def test_calculate_metrics_returns_none_mape_for_all_zero_targets():
     metrics = evaluator.calculate_metrics(pd.Series([0.0, 0.0]), np.array([0.0, 1.0]))
 
     assert metrics["mape"] is None
+    assert metrics["mu"] is None
+    assert metrics["cov"] is None
+    assert metrics["a20_index"] is None
     assert metrics["n_samples"] == 2
+
+
+def test_calculate_metrics_ignores_zero_targets_without_runtime_warning():
+    evaluator = Evaluator()
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        metrics = evaluator.calculate_metrics(pd.Series([0.0, 10.0, 20.0]), np.array([1.0, 11.0, 18.0]))
+
+    runtime_warnings = [item for item in captured if issubclass(item.category, RuntimeWarning)]
+    assert runtime_warnings == []
+    assert metrics["mape"] == pytest.approx(10.0)
+    assert metrics["mean_ratio"] == pytest.approx(1.0)
 
 
 def test_calculate_metrics_returns_expected_keys_for_normal_input():
@@ -57,7 +75,6 @@ def test_regime_schema_reuses_train_quantile_edges_on_test_split():
         }
     )
     y_train = pd.Series([100.0, 118.0, 210.0, 250.0, 330.0, 350.0])
-    y_pred_train = np.array([105.0, 120.0, 205.0, 255.0, 325.0, 345.0])
     schema = evaluator.fit_regime_schema(y_train, X_train, regime_config)
 
     X_test = pd.DataFrame(

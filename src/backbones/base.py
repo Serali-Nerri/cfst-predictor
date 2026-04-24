@@ -3,7 +3,14 @@
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 import pandas as pd
-from optuna.trial import Trial
+
+
+class OptunaTrialProtocol(Protocol):
+    def suggest_int(self, name: str, low: int, high: int) -> int:
+        ...
+
+    def suggest_float(self, name: str, low: float, high: float, *, log: bool = False) -> float:
+        ...
 
 
 class BackboneAdapter(Protocol):
@@ -23,7 +30,7 @@ class BackboneAdapter(Protocol):
 
     def build_optuna_trial_params(
         self,
-        trial: Trial,
+        trial: OptunaTrialProtocol,
         params: Dict[str, Any],
     ) -> Dict[str, Any]:
         ...

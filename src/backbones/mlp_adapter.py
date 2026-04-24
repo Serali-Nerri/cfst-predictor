@@ -3,9 +3,9 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from optuna.trial import Trial
 from sklearn.neural_network import MLPRegressor
 
+from src.backbones.base import OptunaTrialProtocol
 from src.backbones.registry import register_backbone_adapter
 
 
@@ -69,7 +69,7 @@ class MLPBackboneAdapter:
             },
         }
 
-    def build_optuna_trial_params(self, trial: Trial, params: Dict[str, Any]) -> Dict[str, Any]:
+    def build_optuna_trial_params(self, trial: OptunaTrialProtocol, params: Dict[str, Any]) -> Dict[str, Any]:
         search_space = self.get_optuna_search_space(params)
         first_layer = trial.suggest_int("first_layer", int(search_space["first_layer"]["low"]), int(search_space["first_layer"]["high"]))
         second_layer = trial.suggest_int("second_layer", int(search_space["second_layer"]["low"]), int(search_space["second_layer"]["high"]))

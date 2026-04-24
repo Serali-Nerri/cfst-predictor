@@ -3,8 +3,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from optuna.trial import Trial
 
+from src.backbones.base import OptunaTrialProtocol
 from src.backbones.registry import register_backbone_adapter
 
 
@@ -43,7 +43,7 @@ class LightGBMBackboneAdapter:
             "colsample_bytree": {"kind": "float", "low": 0.5, "high": 1.0},
         }
 
-    def build_optuna_trial_params(self, trial: Trial, params: Dict[str, Any]) -> Dict[str, Any]:
+    def build_optuna_trial_params(self, trial: OptunaTrialProtocol, params: Dict[str, Any]) -> Dict[str, Any]:
         search_space = self.get_optuna_search_space(params)
         return {
             "objective": params.get("objective", "regression"),

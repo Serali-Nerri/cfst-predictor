@@ -1,7 +1,11 @@
 .sisyphus/
 .ruff_cache/
 __pycache__/
+**/__pycache__/
+*.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
 # Stage experimental outputs under output/experiments/, but keep all generated output untracked by default.
 output/
 catboost_info/

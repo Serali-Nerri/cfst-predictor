@@ -1,11 +1,6 @@
 {
-  "pythonVersion": "3.13",
+  "pythonVersion": "3.12",
   "pythonPlatform": "Linux",
-  "venvPath": "/home/thelya",
-  "venv": "miniconda3",
-  "extraPaths": [
-    "/home/thelya/miniconda3/lib/python3.13/site-packages"
-  ],
   "exclude": [
     "scripts/filter_nonstandard_titles.py"
   ],
