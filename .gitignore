@@ -9,3 +9,4 @@ htmlcov/
 # Stage experimental outputs under output/experiments/, but keep all generated output untracked by default.
 output/
 catboost_info/
+tmp/
