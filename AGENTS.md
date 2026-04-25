@@ -1,0 +1,40 @@
+# Repository Guidelines
+
+## Project Structure & Module Organization
+- `src/` contains pipeline modules: `data_loader.py`, `preprocessor.py`, `model_trainer.py`, `evaluator.py`, `predictor.py`, `visualizer.py`, plus `src/utils/` for logging and model I/O helpers.
+- Entry points are `train.py` (training/evaluation) and `predict.py` (inference).
+- Configuration lives in `config/config.yaml`; prefer config-driven changes over hardcoded values. The current default mainline is `target_mode: eta_u_over_npl` + `target_transform.enabled: true` + `target_transform.type: log` + `model.keml.enabled: true` + `n_trials: 100`.
+- Data is organized under `data/raw/` and `data/processed/`.
+- Generated model artifacts go to `output/`; `logs/` is tracked and stores reusable params, experiment summaries, and the Optuna SQLite study.
+
+## Build, Test, and Development Commands
+- `python -m venv .venv && source .venv/bin/activate`: create and activate a local environment.
+- `pip install -r requirements.txt`: install runtime dependencies, including optional backbones now tracked in the main requirements file (`lightgbm`, `catboost`).
+- `python train.py --config config/config.yaml`: run the default `eta_u_over_npl + log` + KeML mainline and export artifacts to `output/eta_u_over_npl_log_original_default_optuna100`.
+- `python predict.py --model output/eta_u_over_npl_log_original_default_optuna100 --input data/processed/final_feature_parameters_raw.csv --output output/predictions.csv`: run batch prediction with the current default saved model.
+- `pytest -q`: run the full test suite from the repo root.
+- `python -m pytest -q tests/test_experiment_configs.py tests/test_train.py tests/test_model_utils.py tests/test_predictor.py`: run the focused regression checks for config routing, training flow, artifact loading, and prediction behavior.
+- `pyright`: run static type checking (configured by `pyrightconfig.json`).
+
+## Coding Style & Naming Conventions
+- Follow PEP 8 with 4-space indentation and clear docstrings for public classes/functions.
+- Use `snake_case` for functions/variables/files, `PascalCase` for classes (for example, `ModelTrainer`, `DataLoader`).
+- Keep modules focused: data handling in `data_loader/preprocessor`, training logic in `model_trainer`, metrics in `evaluator`.
+- Prefer type hints on new or modified public APIs.
+
+## Testing Guidelines
+- Add tests in `tests/` using `test_*.py` naming.
+- Use `pytest` style assertions for new coverage; run with `pytest -q` from the repo root.
+- For pipeline changes, include a smoke check by running `train.py --config config/config.yaml` and one `predict.py` command against the current default output directory from `config/config.yaml`.
+- For changes that touch default configs, experiment routing, artifact resolution, or prediction loading, run `pytest -q tests/test_experiment_configs.py tests/test_train.py tests/test_model_utils.py tests/test_predictor.py`.
+
+## Commit & Pull Request Guidelines
+- Current history mixes styles; standardize on Conventional Commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`.
+- Keep commits scoped and imperative (for example, `fix: guard missing features in predictor`).
+- PRs should include: purpose, key files changed, config/data assumptions, and validation evidence (metrics such as RMSE/R²/COV, or command output).
+- Link related issues and include updated plots/report paths when model behavior changes.
+
+## Documentation Sync
+- If you change the default training mainline, update `README.md` in the same change.
+- If you change reported baseline metrics or default best-params files, update the relevant documentation under `doc/` and `README.md` in the same change.
+- Do not describe `logs/` as disposable output unless `.gitignore` is updated accordingly.
